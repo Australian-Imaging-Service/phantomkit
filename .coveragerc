@@ -1,0 +1,3 @@
+[run]
+omit = */tests/*, phantom_qa_metrics/_version.py
+branch = true

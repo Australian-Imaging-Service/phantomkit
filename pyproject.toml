@@ -3,24 +3,30 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gsp-metrics"
-description = "Collection of tools to derive metrics from gold standard phantom MR images."
+name = "phantom-qa-metrics"
+description = "Collection of tools to derive metrics from physical phantoms used in QA of medical imaging instruments."
 readme = "README.md"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "typing_extensions >=4.6.3; python_version < '4.0'",
     "fileformats-medimage-extras",
+    "matplotlib >=3.7.0",
+    "numpy >=1.24.0",
+    "pandas >=2.0.0",
     "pydra >=1.0a7",
+    "scipy >=1.10.0",
+    "typing_extensions >=4.6.3; python_version < '4.0'",
 ]
 
 authors = [
     { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
-    { name = "Thomas G. Close", email = "tom.g.close@gmail.com" }
+    { name = "Thomas G. Close", email = "tom.g.close@gmail.com" },
+    { name = "Arkiev D'Souza", email = "arkiev.dsouza@sydney.edu.au" }
 ]
 maintainers = [
     { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
-    { name = "Thomas G. Close", email = "tom.g.close@gmail.com" }
+    { name = "Thomas G. Close", email = "tom.g.close@gmail.com" },
+    { name = "Arkiev D'Souza", email = "arkiev.dsouza@sydney.edu.au" }
 ]
 keywords = [
     "MRI",
@@ -67,25 +73,25 @@ docs = [
 ]
 
 [project.urls]
-repository = "https://github.com/Australian-Imaging-Service/gold-standard-phantom-metrics"
+repository = "https://github.com/Australian-Imaging-Service/phantom-qa-metrics"
 
 
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "gsp_metrics/_version.py"
+version-file = "phantom_qa_metrics/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["gsp_metrics"]
+packages = ["phantom_qa_metrics"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build]
-packages = ["gsp_metrics"]
+packages = ["phantom_qa_metrics"]
 exclude = ["tests"]
-include = ["./gsp_metrics"]
+include = ["./phantom_qa_metrics"]
 
 [tool.mypy]
 python_version = "3.11"
