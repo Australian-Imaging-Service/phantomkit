@@ -74,6 +74,7 @@ docs = [
 ]
 
 [project.scripts]
+phantom-process = "phantom_qa_metrics.pydra_phantom_iterative:main"
 plot-vial-intensity = "phantom_qa_metrics.plot_vial_intensity:main"
 plot-maps-ir = "phantom_qa_metrics.plot_maps_ir:main"
 plot-maps-te = "phantom_qa_metrics.plot_maps_TE:main"

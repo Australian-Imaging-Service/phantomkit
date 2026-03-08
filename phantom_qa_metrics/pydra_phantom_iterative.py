@@ -10,6 +10,8 @@ import re
 import os.path
 from pathlib import Path
 
+import click
+
 from pydra.compose import python, shell, workflow
 
 # Existing pydra shell tasks from pydra-tasks-ants and pydra-tasks-mrtrix3
@@ -1010,45 +1012,85 @@ def BuildRoiOverlay(
     return math.out_file
 
 
-@python.define(outputs=["out_png"])
-def MrViewScreenshot(contrast_file: str, roi_overlay: str, out_png: str) -> str | None:
-    """Capture an mrview screenshot with ROI overlay. Returns the saved PNG path or None."""
-    import subprocess
-    from pathlib import Path
+@shell.define
+class MrView(shell.Task["MrView.Outputs"]):
+    """Capture an mrview screenshot with an optional ROI overlay.
 
-    result = subprocess.run(
-        [
-            "mrview",
-            contrast_file,
-            "-mode",
-            "1",
-            "-plane",
-            "2",
-            "-roi.load",
-            roi_overlay,
-            "-roi.colour",
-            "1,0,0",
-            "-roi.opacity",
-            "1",
-            "-comments",
-            "0",
-            "-noannotations",
-            "-fullscreen",
-            "-capture.folder",
-            str(Path(out_png).parent),
-            "-capture.prefix",
-            Path(out_png).stem,
-            "-capture.grab",
-            "-exit",
-        ],
-        capture_output=True,
-        text=True,
+    mrview appends ``0000`` to ``capture_prefix`` when naming the output
+    file, so the output is ``{capture_folder}/{capture_prefix}0000.png``.
+    """
+
+    executable = "mrview"
+
+    image: str = shell.arg(
+        argstr="",
+        position=1,
+        help="Input image to display.",
     )
-    if result.returncode != 0:
-        logger.warning("mrview screenshot failed: %s", result.stderr)
-        return None
-    actual = str(Path(out_png).parent / f"{Path(out_png).stem}0000.png")
-    return actual if Path(actual).exists() else None
+    mode: int = shell.arg(
+        default=1,
+        argstr="-mode",
+        help="Display mode (1 = ortho view).",
+    )
+    plane: int = shell.arg(
+        default=2,
+        argstr="-plane",
+        help="Plane to display (0=sagittal, 1=coronal, 2=axial).",
+    )
+    roi_load: str | None = shell.arg(
+        default=None,
+        argstr="-roi.load",
+        help="ROI overlay image to load.",
+    )
+    roi_colour: str | None = shell.arg(
+        default=None,
+        argstr="-roi.colour",
+        help="ROI overlay colour as 'R,G,B'.",
+    )
+    roi_opacity: float | None = shell.arg(
+        default=None,
+        argstr="-roi.opacity",
+        help="ROI overlay opacity (0–1).",
+    )
+    comments: int | None = shell.arg(
+        default=None,
+        argstr="-comments",
+        help="Show image comments (0 = hide).",
+    )
+    noannotations: bool = shell.arg(
+        default=False,
+        argstr="-noannotations",
+        help="Hide image annotations.",
+    )
+    fullscreen: bool = shell.arg(
+        default=False,
+        argstr="-fullscreen",
+        help="Display fullscreen.",
+    )
+    capture_folder: str = shell.arg(
+        argstr="-capture.folder",
+        help="Directory to save the screenshot.",
+    )
+    capture_prefix: str = shell.arg(
+        argstr="-capture.prefix",
+        help="Filename prefix for the screenshot.",
+    )
+    capture_grab: bool = shell.arg(
+        default=True,
+        argstr="-capture.grab",
+        help="Capture a screenshot.",
+    )
+    exit_after: bool = shell.arg(
+        default=True,
+        argstr="-exit",
+        help="Exit mrview after capturing.",
+    )
+
+    class Outputs(shell.Outputs):
+        out_png: str = shell.outarg(
+            path_template="{capture_folder}/{capture_prefix}0000.png",
+            help="Captured screenshot (mrview appends '0000' to the prefix).",
+        )
 
 
 @workflow.define
@@ -1108,12 +1150,16 @@ def GeneratePlots(
                 name=f"overlay_{contrast_name}",
             )
             screenshot = workflow.add(
-                MrViewScreenshot(
-                    contrast_file=contrast_file,
-                    roi_overlay=overlay.out,
-                    out_png=str(
-                        Path(tmp_vial_dir) / f"{contrast_name}_roi_overlay.png"
-                    ),
+                MrView(
+                    image=contrast_file,
+                    roi_load=overlay.out,
+                    roi_colour="1,0,0",
+                    roi_opacity=1.0,
+                    comments=0,
+                    noannotations=True,
+                    fullscreen=True,
+                    capture_folder=tmp_vial_dir,
+                    capture_prefix=f"{contrast_name}_roi_overlay",
                 ),
                 name=f"screenshot_{contrast_name}",
             )
@@ -1156,10 +1202,16 @@ def GeneratePlots(
                 name=f"overlay_{contrast_type}",
             )
             screenshot = workflow.add(
-                MrViewScreenshot(
-                    contrast_file=matching[0],
-                    roi_overlay=overlay.out,
-                    out_png=roi_image_arg,
+                MrView(
+                    image=matching[0],
+                    roi_load=overlay.out,
+                    roi_colour="1,0,0",
+                    roi_opacity=1.0,
+                    comments=0,
+                    noannotations=True,
+                    fullscreen=True,
+                    capture_folder=tmp_vial_dir,
+                    capture_prefix=f"roi_overlay_{contrast_type}",
                 ),
                 name=f"screenshot_{contrast_type}",
             )
@@ -1365,70 +1417,77 @@ def BatchWorkflow(
 # Command-line Interface
 # ============================================================================
 
-if __name__ == "__main__":
-    import argparse
-    import pydra
 
+@click.group()
+def main():
+    """Pydra phantom processing workflow (no Docker)."""
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
 
-    parser = argparse.ArgumentParser(
-        description="Pydra phantom processing workflow (no Docker)"
+
+@main.command()
+@click.argument("input_image")
+@click.option("--template-dir", required=True, help="Template phantom directory.")
+@click.option("--output-dir", required=True, help="Output base directory.")
+@click.option("--rotation-lib", required=True, help="Rotation library file.")
+def single(input_image, template_dir, output_dir, rotation_lib):
+    """Process one session."""
+    import pydra
+
+    wf = PhantomSessionWorkflow(
+        input_image=input_image,
+        template_dir=template_dir,
+        output_base_dir=output_dir,
+        rotation_library_file=rotation_lib,
     )
-    subparsers = parser.add_subparsers(dest="command")
+    with pydra.Submitter(plugin="serial") as sub:
+        sub(wf)
+    result = wf.result()
+    logger.info("Done! Metrics: %s", result.output.metrics_dir)
 
-    single_parser = subparsers.add_parser("single", help="Process one session")
-    single_parser.add_argument("input_image", help="Input NIfTI file")
-    single_parser.add_argument("--template-dir", required=True)
-    single_parser.add_argument("--output-dir", required=True)
-    single_parser.add_argument("--rotation-lib", required=True)
 
-    batch_parser = subparsers.add_parser(
-        "batch", help="Batch-process multiple sessions"
+@main.command()
+@click.argument("data_dir")
+@click.option("--template-dir", required=True, help="Template phantom directory.")
+@click.option("--output-dir", required=True, help="Output base directory.")
+@click.option("--rotation-lib", required=True, help="Rotation library file.")
+@click.option(
+    "--pattern",
+    default="*t1*mprage*.nii.gz",
+    show_default=True,
+    help="Glob pattern for session images.",
+)
+@click.option(
+    "--plugin",
+    default="cf",
+    show_default=True,
+    type=click.Choice(["cf", "serial"]),
+    help="Pydra execution plugin.",
+)
+def batch(data_dir, template_dir, output_dir, rotation_lib, pattern, plugin):
+    """Batch-process multiple sessions."""
+    import pydra
+
+    images = sorted(str(img) for img in Path(data_dir).glob(f"*/{pattern}"))
+    if not images:
+        logger.error("No images found!")
+        raise SystemExit(1)
+
+    logger.info("Found %d images:", len(images))
+    for img in images:
+        logger.info("  %s", img)
+
+    wf = BatchWorkflow(
+        input_images=images,
+        template_dir=template_dir,
+        output_base_dir=output_dir,
+        rotation_library_file=rotation_lib,
     )
-    batch_parser.add_argument("data_dir", help="Directory containing session folders")
-    batch_parser.add_argument("--template-dir", required=True)
-    batch_parser.add_argument("--output-dir", required=True)
-    batch_parser.add_argument("--rotation-lib", required=True)
-    batch_parser.add_argument("--pattern", default="*t1*mprage*.nii.gz")
-    batch_parser.add_argument("--plugin", default="cf", choices=["cf", "serial"])
+    with pydra.Submitter(plugin=plugin) as sub:
+        sub(wf)
+    logger.info("All sessions processed! Output: %s", output_dir)
 
-    args = parser.parse_args()
 
-    if args.command == "single":
-        wf = PhantomSessionWorkflow(
-            input_image=args.input_image,
-            template_dir=args.template_dir,
-            output_base_dir=args.output_dir,
-            rotation_library_file=args.rotation_lib,
-        )
-        with pydra.Submitter(plugin="serial") as sub:
-            sub(wf)
-        result = wf.result()
-        logger.info("Done! Metrics: %s", result.output.metrics_dir)
-
-    elif args.command == "batch":
-        images = sorted(
-            str(img) for img in Path(args.data_dir).glob(f"*/{args.pattern}")
-        )
-        if not images:
-            logger.error("No images found!")
-            raise SystemExit(1)
-
-        logger.info("Found %d images:", len(images))
-        for img in images:
-            logger.info("  %s", img)
-
-        wf = BatchWorkflow(
-            input_images=images,
-            template_dir=args.template_dir,
-            output_base_dir=args.output_dir,
-            rotation_library_file=args.rotation_lib,
-        )
-        with pydra.Submitter(plugin=args.plugin) as sub:
-            sub(wf)
-        logger.info("All sessions processed! Output: %s", args.output_dir)
-
-    else:
-        parser.print_help()
+if __name__ == "__main__":
+    main()
