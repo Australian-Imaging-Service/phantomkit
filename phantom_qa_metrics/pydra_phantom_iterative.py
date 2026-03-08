@@ -7,7 +7,6 @@ No Docker required - uses local ANTs and MRtrix3 installations.
 
 import logging
 import re
-import subprocess
 import os.path
 from pathlib import Path
 
@@ -15,12 +14,14 @@ from pydra.compose import python, shell, workflow
 
 # Existing pydra shell tasks from pydra-tasks-ants and pydra-tasks-mrtrix3
 from pydra.tasks.ants.v2.resampling.apply_transforms import ApplyTransforms
-from pydra.tasks.mrtrix3.v3_1.mrconvert import MrConvert
-from pydra.tasks.mrtrix3.v3_1.mrgrid import MrGrid
-from pydra.tasks.mrtrix3.v3_1.mrinfo import MrInfo
-from pydra.tasks.mrtrix3.v3_1.mrmath import MrMath  # noqa: F401 — exported for callers
-from pydra.tasks.mrtrix3.v3_1.mrstats import MrStats
-from pydra.tasks.mrtrix3.v3_1.mrtransform import MrTransform
+from pydra.tasks.mrtrix3.v3_1 import (
+    MrConvert,
+    MrGrid,
+    MrInfo,
+    MrStats,
+    MrTransform,
+    MrMath,
+)  # noqa: F401 — exported for callers
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +393,120 @@ def CheckRegistration(
         "rotation_matrix_file",
     ]
 )
+def _RegistrationStep(
+    image_to_register: str,
+    original_image: str,
+    applied_rotation: str | None,
+    template_phantom: str,
+    rotations: list[str],
+    vial_masks: list[str],
+    session_name: str,
+    tmp_dir: str,
+    iteration: int,
+) -> tuple[str, str, str, int, str, str | None]:
+    """
+    Single step of the iterative registration loop.
+
+    Runs **RegistrationSynN** then **CheckRegistration**.  If the check
+    passes the results are returned directly.  If it fails and rotations
+    remain, the next rotation is applied to *original_image* and this
+    workflow calls itself recursively with ``iteration + 1``.
+    """
+    from pathlib import Path
+    from fileformats.medimage import NiftiGz
+    from fileformats.generic import File
+
+    tmp = Path(tmp_dir)
+    tmp.mkdir(parents=True, exist_ok=True)
+    logger.info("=== Iteration %d ===", iteration)
+
+    reg = workflow.add(
+        RegistrationSynN(
+            fixed_image=template_phantom,
+            moving_image=image_to_register,
+            output_prefix=str(tmp / f"{session_name}_Transformed{iteration}_"),
+            transform_type="r",
+            num_threads=8,
+            use_histogram_matching=1,
+        ),
+        name="reg",
+    )
+
+    check = workflow.add(
+        CheckRegistration(
+            warped_image=reg.warped_image,
+            vial_masks=vial_masks,
+            tmp_dir=str(tmp / "check"),
+        ),
+        name="check",
+    )
+
+    if check.out:
+        # Correct orientation found — return this iteration's results.
+        logger.info("Correct orientation found at iteration %d", iteration)
+        return (
+            reg.warped_image,
+            reg.out_matrix,
+            reg.inverse_warped_image,
+            iteration,
+            image_to_register,
+            applied_rotation,
+        )
+    elif iteration < len(rotations):
+        # Apply the next rotation to the original image and recurse.
+        logger.warning("Registration check failed, applying rotation %d", iteration)
+        next_rotation_file = str(tmp / f"rotation_{iteration + 1}.txt")
+        _create_rotation_matrix_file(rotations[iteration], next_rotation_file)
+
+        rot = workflow.add(
+            MrTransform(
+                in_file=NiftiGz(original_image),
+                linear=File(next_rotation_file),
+                out_file=str(tmp / f"{session_name}_iteration{iteration + 1}.nii.gz"),
+                interp="nearest",
+                force=True,
+            ),
+            name="rotate",
+        )
+
+        next_step = workflow.add(
+            _RegistrationStep(
+                image_to_register=rot.out_file,
+                original_image=original_image,
+                applied_rotation=next_rotation_file,
+                template_phantom=template_phantom,
+                rotations=rotations,
+                vial_masks=vial_masks,
+                session_name=session_name,
+                tmp_dir=str(tmp.parent / f"step_{iteration + 1}"),
+                iteration=iteration + 1,
+            ),
+            name="next_step",
+        )
+        return (
+            next_step.warped,
+            next_step.transform,
+            next_step.inverse_warped,
+            next_step.iteration,
+            next_step.rotated_input,
+            next_step.rotation_matrix_file,
+        )
+    else:
+        raise RuntimeError(
+            f"Failed to find correct orientation after {iteration} attempts"
+        )
+
+
+@workflow.define(
+    outputs=[
+        "warped",
+        "transform",
+        "inverse_warped",
+        "iteration",
+        "rotated_input",
+        "rotation_matrix_file",
+    ]
+)
 def IterativeRegistration(
     input_image: str,
     template_phantom: str,
@@ -403,100 +518,40 @@ def IterativeRegistration(
     """
     Iteratively register the input image to the template phantom.
 
-    On each iteration:
-
-    1. **RegistrationSynN** performs a rigid registration.
-    2. **CheckRegistration** verifies the orientation via vial intensity ranking.
-    3. If the check fails and rotations remain, **MrTransform** applies the
-       next rotation and retries.
-
-    The while-loop and file-reading trigger pydra's runtime fallback, so
-    all node outputs are concrete values available for loop control.
+    Loads the rotation library (triggering pydra's runtime fallback), then
+    delegates to **_RegistrationStep** which recurses until the orientation
+    check passes or all rotations are exhausted.
     """
     from pathlib import Path
-    from fileformats.medimage import NiftiGz
-    from fileformats.generic import File
 
     tmp = Path(tmp_dir)
     tmp.mkdir(parents=True, exist_ok=True)
 
-    # Reading the rotation library triggers the runtime fallback (rotation_library_file
-    # is a lazy proxy at static-graph-build time).
+    # Reading the file triggers the runtime fallback so all downstream
+    # node outputs are concrete when _RegistrationStep runs.
     rotations = _load_rotations(rotation_library_file)
 
-    iteration = 0
-    correct_orientation = False
-    current_input = input_image
-    rotation_matrix_file: str | None = None
-    warped: str | None = None
-    transform: str | None = None
-    inverse_warped: str | None = None
-
-    while not correct_orientation and iteration < len(rotations):
-        iteration += 1
-        logger.info("=== Iteration %d ===", iteration)
-
-        reg = workflow.add(
-            RegistrationSynN(
-                fixed_image=template_phantom,
-                moving_image=current_input,
-                output_prefix=str(tmp / f"{session_name}_Transformed{iteration}_"),
-                transform_type="r",
-                num_threads=8,
-                use_histogram_matching=1,
-            ),
-            name=f"reg_{iteration}",
-        )
-        warped = reg.warped_image
-        transform = reg.out_matrix
-        inverse_warped = reg.inverse_warped_image
-
-        check = workflow.add(
-            CheckRegistration(
-                warped_image=warped,
-                vial_masks=vial_masks,
-                tmp_dir=str(tmp / f"check_{iteration}"),
-            ),
-            name=f"check_{iteration}",
-        )
-        correct_orientation = check.out
-
-        if correct_orientation:
-            logger.info("Correct orientation found at iteration %d", iteration)
-            break
-
-        if iteration < len(rotations):
-            logger.warning("Registration check failed, applying rotation %d", iteration)
-            rotation_str = rotations[iteration]
-            rotation_matrix_file = str(tmp / f"rotation_{iteration + 1}.txt")
-            _create_rotation_matrix_file(rotation_str, rotation_matrix_file)
-
-            rot = workflow.add(
-                MrTransform(
-                    in_file=NiftiGz(input_image),
-                    linear=File(rotation_matrix_file),
-                    out_file=str(
-                        tmp / f"{session_name}_iteration{iteration + 1}.nii.gz"
-                    ),
-                    interp="nearest",
-                    force=True,
-                ),
-                name=f"rotate_{iteration}",
-            )
-            current_input = rot.out_file
-
-    if not correct_orientation:
-        raise RuntimeError(
-            f"Failed to find correct orientation after {iteration} attempts"
-        )
-
+    step = workflow.add(
+        _RegistrationStep(
+            image_to_register=input_image,
+            original_image=input_image,
+            applied_rotation=None,
+            template_phantom=template_phantom,
+            rotations=rotations,
+            vial_masks=vial_masks,
+            session_name=session_name,
+            tmp_dir=str(tmp / "step_1"),
+            iteration=1,
+        ),
+        name="step",
+    )
     return (
-        warped,
-        transform,
-        inverse_warped,
-        iteration,
-        current_input,
-        rotation_matrix_file,
+        step.warped,
+        step.transform,
+        step.inverse_warped,
+        step.iteration,
+        step.rotated_input,
+        step.rotation_matrix_file,
     )
 
 
@@ -789,8 +844,6 @@ def TransformContrastsToTemplateSpace(
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tmp_dir) / "template_space_contrasts"
-    tmp.mkdir(parents=True, exist_ok=True)
 
     # Iterating over contrast_files (lazy at static-graph-build time) triggers
     # the runtime fallback; from here all values are concrete.
@@ -808,7 +861,7 @@ def TransformContrastsToTemplateSpace(
                 MrTransform(
                     in_file=NiftiGz(contrast_file),
                     linear=File(rotation_matrix_file),
-                    out_file=str(tmp / f"{contrast_name}_rotated.nii.gz"),
+                    out_file=f"{contrast_name}_rotated.nii.gz",
                     interp="linear",
                     force=True,
                 ),
@@ -835,7 +888,7 @@ def TransformContrastsToTemplateSpace(
                     in_file=source,
                     operation="pad",
                     axis=[(2, (1, 1))],
-                    out_file=str(tmp / f"{contrast_name}_padded.nii.gz"),
+                    out_file=f"{contrast_name}_padded.nii.gz",
                     force=True,
                 ),
                 name=f"pad_{contrast_name}",
@@ -867,6 +920,9 @@ def TransformContrastsToTemplateSpace(
 
         copied_files.append(copy_file.out)
 
+    # We need to have a node that collates all the output paths
+    # to guarantee that they run before the parent directory
+    # is returned
     @python.define
     def CommonPath(file_paths: list[File]) -> Path:
         return Path(os.path.commonpath(file_paths))
@@ -877,201 +933,247 @@ def TransformContrastsToTemplateSpace(
     return common_path.out
 
 
-@python.define
+@shell.define
+class MrCat(shell.Task["MrCat.Outputs"]):
+    """Concatenate several images into one."""
+
+    executable = "mrcat"
+
+    in_files: list[str] = shell.arg(
+        argstr="",
+        position=1,
+        help="the input image(s).",
+    )
+    out_file: str = shell.arg(
+        argstr="",
+        position=2,
+        help="the output image.",
+    )
+    axis: int | None = shell.arg(
+        default=None,
+        argstr="-axis",
+        help="specify axis along which to perform the concatenation.",
+    )
+    force: bool = shell.arg(
+        default=False,
+        argstr="-force",
+        help="force image output, even if file exists.",
+    )
+
+    class Outputs(shell.Outputs):
+        out_file: str = shell.outarg(
+            argstr="",
+            position=2,
+            path_template="{out_file}",
+            help="the output image.",
+        )
+
+
+@workflow.define
+def BuildRoiOverlay(
+    vial_masks: list[str], reference_image: str, prefix: str, tmp_dir: str
+) -> str:
+    """Regrid each vial mask to the reference image space and combine into one overlay."""
+    from pathlib import Path
+    from fileformats.medimage import NiftiGz
+
+    tmp = Path(tmp_dir)
+    tmp.mkdir(parents=True, exist_ok=True)
+    cat_tmp = str(tmp / f"{prefix}_cat_tmp.nii.gz")
+    roi_overlay = str(tmp / f"{prefix}_VialsCombined.nii.gz")
+
+    regridded: list[str] = []
+    for vial_mask in vial_masks:  # triggers runtime fallback
+        vial_name = Path(vial_mask).name.replace(".nii.gz", "").replace(".nii", "")
+        out = str(tmp / f"{prefix}_{vial_name}.nii.gz")
+        grid = workflow.add(
+            MrGrid(
+                in_file=NiftiGz(vial_mask),
+                operation="regrid",
+                template=NiftiGz(reference_image),
+                out_file=out,
+                interp="nearest",
+                force=True,
+            ),
+            name=f"grid_{prefix}_{vial_name}",
+        )
+        regridded.append(grid.out_file)
+
+    cat = workflow.add(
+        MrCat(in_files=regridded, out_file=cat_tmp, axis=3, force=True),
+        name=f"cat_{prefix}",
+    )
+    math = workflow.add(
+        MrMath(in_file=[cat.out_file], operation="max", out_file=roi_overlay, axis=3),
+        name=f"math_{prefix}",
+    )
+    return math.out_file
+
+
+@python.define(outputs=["out_png"])
+def MrViewScreenshot(contrast_file: str, roi_overlay: str, out_png: str) -> str | None:
+    """Capture an mrview screenshot with ROI overlay. Returns the saved PNG path or None."""
+    import subprocess
+    from pathlib import Path
+
+    result = subprocess.run(
+        [
+            "mrview",
+            contrast_file,
+            "-mode",
+            "1",
+            "-plane",
+            "2",
+            "-roi.load",
+            roi_overlay,
+            "-roi.colour",
+            "1,0,0",
+            "-roi.opacity",
+            "1",
+            "-comments",
+            "0",
+            "-noannotations",
+            "-fullscreen",
+            "-capture.folder",
+            str(Path(out_png).parent),
+            "-capture.prefix",
+            Path(out_png).stem,
+            "-capture.grab",
+            "-exit",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        logger.warning("mrview screenshot failed: %s", result.stderr)
+        return None
+    actual = str(Path(out_png).parent / f"{Path(out_png).stem}0000.png")
+    return actual if Path(actual).exists() else None
+
+
+@workflow.define
 def GeneratePlots(
     contrast_files: list[str],
     metrics_dir: str,
     vial_dir: str,
     session_name: str,
-    template_dir: str,
 ) -> None:
     """
     Generate per-contrast vial intensity scatter plots and parametric map
-    plots (IR/TE) by calling the external Python plotting scripts.
+    plots (IR/TE) using the plotting API functions directly as pydra tasks.
 
-    Vial mask overlays are built by combining masks with **MrGrid**
-    (pydra shell task via ``pydra.Submitter``) and then mrcat/mrmath
-    (via subprocess, without piping — using intermediate files).
+    Vial mask overlays are built using MrGrid + MrCat + MrMath pydra tasks.
+    Screenshots use mrview via MrViewScreenshot.
     """
-    import pydra
     import re as _re
     from pathlib import Path
-    from fileformats.medimage import NiftiGz
+    from phantom_qa_metrics.plot_vial_intensity import plot_vial_intensity
+    from phantom_qa_metrics.plot_maps_ir import (
+        plot_vial_means_std_pub_from_nifti as plot_ir,
+    )
+    from phantom_qa_metrics.plot_maps_TE import (
+        plot_vial_means_std_pub_from_nifti as plot_te,
+    )
 
     metrics_path = Path(metrics_dir)
     vial_path = Path(vial_dir)
-    template_path = Path(template_dir)
+    tmp_vial_dir = str(vial_path / "tmp")
 
-    plot_vial_script = template_path.parent / "Functions" / "plot_vial_intensity.py"
-    if not plot_vial_script.exists():
-        logger.warning("Plotting script not found: %s, skipping", plot_vial_script)
-        return
-
-    tmp_vial_dir = vial_path / "tmp"
-    tmp_vial_dir.mkdir(exist_ok=True)
-    vial_masks_list = sorted(str(m) for m in vial_path.glob("*.nii.gz"))
-
-    def _build_roi_overlay(reference_image: str, prefix: str) -> str:
-        """Regrid each vial to the reference image and combine into one mask."""
-        regridded: list[str] = []
-        for vial_mask in vial_masks_list:
-            vial_name = Path(vial_mask).name.replace(".nii.gz", "").replace(".nii", "")
-            out = str(tmp_vial_dir / f"{prefix}_{vial_name}.nii.gz")
-            grid_task = MrGrid(
-                in_file=NiftiGz(vial_mask),
-                operation="regrid",
-                template=NiftiGz(reference_image),
-                out_file=out,
-                force=True,
-            )
-            with pydra.Submitter(plugin="serial") as sub:
-                sub(grid_task)
-            regridded.append(str(grid_task.result().output.out_file))
-
-        roi_overlay = str(tmp_vial_dir / f"{prefix}_VialsCombined.nii.gz")
-        cat_tmp = str(tmp_vial_dir / f"{prefix}_cat_tmp.nii.gz")
-        if regridded:
-            subprocess.run(
-                ["mrcat"] + regridded + [cat_tmp, "-axis", "3", "-force"],
-                check=True,
-                capture_output=True,
-            )
-            subprocess.run(
-                ["mrmath", cat_tmp, "max", roi_overlay, "-axis", "3", "-force"],
-                check=True,
-                capture_output=True,
-            )
-        return roi_overlay
-
-    def _mrview_screenshot(
-        contrast_file: str, roi_overlay: str, out_png: str
-    ) -> str | None:
-        result = subprocess.run(
-            [
-                "mrview",
-                str(contrast_file),
-                "-mode",
-                "1",
-                "-plane",
-                "2",
-                "-roi.load",
-                roi_overlay,
-                "-roi.colour",
-                "1,0,0",
-                "-roi.opacity",
-                "1",
-                "-comments",
-                "0",
-                "-noannotations",
-                "-fullscreen",
-                "-capture.folder",
-                str(Path(out_png).parent),
-                "-capture.prefix",
-                Path(out_png).stem,
-                "-capture.grab",
-                "-exit",
-            ],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            logger.warning("mrview screenshot failed: %s", result.stderr)
-            return None
-        actual = str(Path(out_png).parent / f"{Path(out_png).stem}0000.png")
-        return actual if Path(actual).exists() else None
+    vial_masks_list = sorted(
+        str(m) for m in vial_path.glob("*.nii.gz")
+    )  # triggers runtime fallback
 
     # Per-contrast scatter plots
     for contrast_file in contrast_files:
         contrast_path = Path(contrast_file)
         contrast_name = contrast_path.stem
-        mean_csv = metrics_path / f"{session_name}_{contrast_name}_mean_matrix.csv"
-        std_csv = metrics_path / f"{session_name}_{contrast_name}_std_matrix.csv"
-        if not mean_csv.exists():
+        mean_csv = str(metrics_path / f"{session_name}_{contrast_name}_mean_matrix.csv")
+        std_csv = str(metrics_path / f"{session_name}_{contrast_name}_std_matrix.csv")
+        if not Path(mean_csv).exists():
             continue
 
-        output_plot = metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
-        roi_overlay = (
-            _build_roi_overlay(contrast_file, contrast_name) if vial_masks_list else ""
+        output_plot = str(
+            metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
         )
-        screenshot = (
-            _mrview_screenshot(
-                contrast_file,
-                roi_overlay,
-                str(tmp_vial_dir / f"{contrast_name}_roi_overlay.png"),
+
+        roi_image: str | None = None
+        if vial_masks_list:
+            overlay = workflow.add(
+                BuildRoiOverlay(
+                    vial_masks=vial_masks_list,
+                    reference_image=contrast_file,
+                    prefix=contrast_name,
+                    tmp_dir=tmp_vial_dir,
+                ),
+                name=f"overlay_{contrast_name}",
             )
-            if roi_overlay
-            else None
+            screenshot = workflow.add(
+                MrViewScreenshot(
+                    contrast_file=contrast_file,
+                    roi_overlay=overlay.out,
+                    out_png=str(
+                        Path(tmp_vial_dir) / f"{contrast_name}_roi_overlay.png"
+                    ),
+                ),
+                name=f"screenshot_{contrast_name}",
+            )
+            roi_image = screenshot.out_png
+
+        workflow.add(
+            python.define(plot_vial_intensity)(
+                csv_file=mean_csv,
+                plot_type="scatter",
+                std_csv=std_csv,
+                roi_image=roi_image,
+                output=output_plot,
+            ),
+            name=f"scatter_{contrast_name}",
         )
-
-        cmd = [
-            "python",
-            str(plot_vial_script),
-            str(mean_csv),
-            "scatter",
-            "--std_csv",
-            str(std_csv),
-            "--output",
-            str(output_plot),
-        ]
-        if screenshot and Path(screenshot).exists():
-            cmd.extend(["--roi_image", screenshot])
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            logger.info("Generated plot: %s", output_plot.name)
-        else:
-            logger.warning("Plot failed for %s: %s", contrast_name, result.stderr)
 
     # Parametric map plots (IR and TE)
     def _matches(stem: str, token: str) -> bool:
         return bool(_re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
 
-    for contrast_type, script_name, suffix in [
-        ("ir", "plot_maps_ir.py", "ir_map_PLOTmeanstd_TEmapping.png"),
-        ("te", "plot_maps_TE.py", "TE_map_PLOTmeanstd_TEmapping.png"),
+    for contrast_type, plot_fn, suffix in [
+        ("ir", plot_ir, "ir_map_PLOTmeanstd_TEmapping.png"),
+        ("te", plot_te, "TE_map_PLOTmeanstd_TEmapping.png"),
     ]:
         matching = [f for f in contrast_files if _matches(Path(f).stem, contrast_type)]
         if not matching:
             continue
 
-        plot_script = template_path.parent / script_name
-        if not plot_script.exists():
-            logger.warning(
-                "%s plotting script not found: %s", contrast_type.upper(), plot_script
-            )
-            continue
+        output_plot = str(metrics_path / f"{session_name}_{suffix}")
 
-        output_plot = metrics_path / f"{session_name}_{suffix}"
-        roi_base = str(tmp_vial_dir / f"roi_overlay_{contrast_type}.png")
-        roi_file = (
-            _build_roi_overlay(matching[0], contrast_type) if vial_masks_list else ""
-        )
-        screenshot = (
-            _mrview_screenshot(matching[0], roi_file, roi_base) if roi_file else None
-        )
-        roi_image_arg = (
-            screenshot if screenshot and Path(screenshot).exists() else roi_base
-        )
-
-        cmd = (
-            ["python3", str(plot_script)]
-            + matching
-            + [
-                "-m",
-                str(metrics_path),
-                "-o",
-                str(output_plot),
-                "--roi_image",
-                roi_image_arg,
-            ]
-        )
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode == 0:
-            logger.info("Generated %s map plot", contrast_type.upper())
-        else:
-            logger.warning(
-                "%s map plot failed: %s", contrast_type.upper(), result.stderr
+        roi_image_arg = str(Path(tmp_vial_dir) / f"roi_overlay_{contrast_type}.png")
+        if vial_masks_list:
+            overlay = workflow.add(
+                BuildRoiOverlay(
+                    vial_masks=vial_masks_list,
+                    reference_image=matching[0],
+                    prefix=contrast_type,
+                    tmp_dir=tmp_vial_dir,
+                ),
+                name=f"overlay_{contrast_type}",
             )
+            screenshot = workflow.add(
+                MrViewScreenshot(
+                    contrast_file=matching[0],
+                    roi_overlay=overlay.out,
+                    out_png=roi_image_arg,
+                ),
+                name=f"screenshot_{contrast_type}",
+            )
+            roi_image_arg = screenshot.out_png
+
+        workflow.add(
+            python.define(plot_fn)(
+                contrast_files=matching,
+                metric_dir=metrics_dir,
+                output_file=output_plot,
+                roi_image=roi_image_arg,
+            ),
+            name=f"map_plot_{contrast_type}",
+        )
 
 
 @python.define
@@ -1214,7 +1316,6 @@ def PhantomSessionWorkflow(
             metrics_dir=extract_metrics.out,
             vial_dir=paths.vial_dir,
             session_name=paths.session_name,
-            template_dir=template_dir,
         ),
         name="generate_plots",
     )
