@@ -230,10 +230,10 @@ class TestMapsIrPlot:
         return contrast_files, metrics, tmp_path
 
     def test_produces_output_file(self, setup) -> None:
-        from phantomkit.plotting.maps_ir import plot_vial_means_std_pub_from_nifti
+        from phantomkit.plotting.maps_ir import plot_vial_ir_means_std
 
         contrast_files, metrics, tmp_path = setup
-        out = plot_vial_means_std_pub_from_nifti(
+        out = plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
             output_file=str(tmp_path / "ir_plot.png"),
@@ -241,10 +241,10 @@ class TestMapsIrPlot:
         assert os.path.exists(out)
 
     def test_also_writes_fit_csv(self, setup) -> None:
-        from phantomkit.plotting.maps_ir import plot_vial_means_std_pub_from_nifti
+        from phantomkit.plotting.maps_ir import plot_vial_ir_means_std
 
         contrast_files, metrics, tmp_path = setup
-        plot_vial_means_std_pub_from_nifti(
+        plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
             output_file=str(tmp_path / "ir_plot.png"),
@@ -268,7 +268,7 @@ class TestMapsIrPlot:
 
     def test_with_roi_image(self, setup, tmp_path) -> None:
         import matplotlib.pyplot as plt
-        from phantomkit.plotting.maps_ir import plot_vial_means_std_pub_from_nifti
+        from phantomkit.plotting.maps_ir import plot_vial_ir_means_std
 
         contrast_files, metrics, _ = setup
         roi_png = tmp_path / "roi.png"
@@ -276,7 +276,7 @@ class TestMapsIrPlot:
         fig.savefig(str(roi_png))
         plt.close(fig)
 
-        out = plot_vial_means_std_pub_from_nifti(
+        out = plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
             output_file=str(tmp_path / "ir_plot.png"),
@@ -342,10 +342,10 @@ class TestMapsTePlot:
         return contrast_files, metrics, tmp_path
 
     def test_produces_output_file(self, setup) -> None:
-        from phantomkit.plotting.maps_te import plot_vial_means_std_pub_from_nifti
+        from phantomkit.plotting.maps_te import plot_vial_te_means_std
 
         contrast_files, metrics, tmp_path = setup
-        out = plot_vial_means_std_pub_from_nifti(
+        out = plot_vial_te_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
             output_file=str(tmp_path / "te_plot.png"),
@@ -354,7 +354,7 @@ class TestMapsTePlot:
 
     def test_with_roi_image(self, setup, tmp_path) -> None:
         import matplotlib.pyplot as plt
-        from phantomkit.plotting.maps_te import plot_vial_means_std_pub_from_nifti
+        from phantomkit.plotting.maps_te import plot_vial_te_means_std
 
         contrast_files, metrics, _ = setup
         roi_png = tmp_path / "roi.png"
@@ -362,7 +362,7 @@ class TestMapsTePlot:
         fig.savefig(str(roi_png))
         plt.close(fig)
 
-        out = plot_vial_means_std_pub_from_nifti(
+        out = plot_vial_te_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
             output_file=str(tmp_path / "te_plot.png"),

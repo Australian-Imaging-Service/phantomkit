@@ -103,7 +103,7 @@ def calc_r2(y_true, y_pred):
     return 1 - (ss_res / ss_tot)
 
 
-def plot_vial_means_std_pub_from_nifti(
+def plot_vial_ir_means_std(
     contrast_files: list[str],
     metric_dir: str,
     output_file: str = "vial_summary_T1.png",
@@ -533,7 +533,7 @@ def plot_vial_means_std_pub_from_nifti(
 def main(contrast_files, metric_dir, output, annotate, roi_image):
     """Plot vial mean ± std for inversion recovery with T₁ fitting and save fit metrics."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    plot_vial_means_std_pub_from_nifti(
+    plot_vial_ir_means_std(
         list(contrast_files),
         metric_dir=metric_dir,
         output_file=output,

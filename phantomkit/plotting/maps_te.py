@@ -102,7 +102,7 @@ def calc_r2(y_true, y_pred):
     return 1 - (ss_res / ss_tot)
 
 
-def plot_vial_means_std_pub_from_nifti(
+def plot_vial_te_means_std(
     contrast_files: list[str],
     metric_dir: str,
     output_file: str = "vial_summary_pub.png",
@@ -530,7 +530,7 @@ def plot_vial_means_std_pub_from_nifti(
 def main(contrast_files, metric_dir, output, annotate, roi_image):
     """Plot grouped vial mean ± std with mono-exponential T₂ fitting and save fit metrics."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    plot_vial_means_std_pub_from_nifti(
+    plot_vial_te_means_std(
         list(contrast_files),
         metric_dir=metric_dir,
         output_file=output,

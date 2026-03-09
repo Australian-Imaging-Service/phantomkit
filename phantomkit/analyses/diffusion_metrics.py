@@ -15,8 +15,12 @@ produces step-wise difference maps plus two summary CSV reports.
 import logging
 from pathlib import Path
 
-from fileformats.generic import File
+from fileformats.generic import Directory, File
 from fileformats.medimage import NiftiGz
+from fileformats.medimage.diffusion import Bval, Bvec
+from fileformats.text import Csv
+from fileformats.vendor.mrtrix3.medimage.dwi import ImageFormatB as MifDwi
+from fileformats.vendor.mrtrix3.medimage.image import ImageFormat as MifImage
 from pydra.compose import python, workflow
 from pydra.tasks.mrtrix3.v3_1 import (
     DwiBiascorrect_Ants as DwiBiascorrectAnts,
@@ -84,7 +88,62 @@ def PrepareOutputDirs(
     Path,
     Path,
 ]:
-    """Create the full output directory tree and return all path components."""
+    """
+    Create the full output directory tree for a DWI analysis session.
+
+    All directories are created with ``mkdir(parents=True, exist_ok=True)``
+    before being returned as path components for use by downstream tasks.
+
+    Parameters
+    ----------
+    input_image : NiftiGz
+        Primary AP-direction DWI NIfTI image.  The session name is taken from
+        the parent directory of this file.
+    output_base_dir : Path, optional
+        Root output directory.  Defaults to ``./output`` if not provided.
+
+    Returns
+    -------
+    session_name : str
+        Name of the session (parent directory of *input_image*).
+    dwi_steps_dir : Path
+        Directory for cumulative pipeline DWI step images.
+    dwi_steps_iso_dir : Path
+        Directory for isolated pipeline DWI step images.
+    adc_maps_dir : Path
+        Directory for cumulative pipeline ADC maps and summary CSV.
+    adc_maps_iso_dir : Path
+        Directory for isolated pipeline ADC maps and summary CSV.
+    diff_maps_dir : Path
+        Directory for step-wise Δ ADC difference maps.
+    topup_dir : Path
+        Working directory for TOPUP (cumulative pipeline).
+    topup_iso_dir : Path
+        Working directory for TOPUP (isolated pipeline).
+    eddy_dir : Path
+        Working directory for EDDY (cumulative pipeline).
+    eddy_iso_dir : Path
+        Working directory for EDDY (isolated pipeline).
+    masks_dir : Path
+        Directory for phantom mask files.
+    denoise_dir : Path
+        Directory for denoising outputs (e.g. noise maps).
+    gibbs_dir : Path
+        Directory for Gibbs ringing removal outputs.
+    bias_dir : Path
+        Directory for bias field correction outputs (cumulative pipeline).
+    bias_iso_dir : Path
+        Directory for bias field correction outputs (isolated pipeline).
+
+    Steps
+    -----
+    1. Resolve *output_base_dir* to ``./output`` if ``None``.
+    2. Derive *session_name* from the parent directory of *input_image*.
+    3. Construct all 14 sub-directory paths under ``output_base_dir /
+       session_name``.
+    4. Create every sub-directory with ``mkdir(parents=True, exist_ok=True)``.
+    5. Return session name and all directory paths as a 15-element tuple.
+    """
     from pathlib import Path as _Path
 
     if output_base_dir is None:
@@ -137,11 +196,11 @@ def PrepareOutputDirs(
 
 @python.define
 def _ComputeMaskFromB0(
-    b0_mean_nii: File,
+    b0_mean_nii: NiftiGz,
     masks_dir: Path,
     phantom_diameter_mm: float,
     erosion_mm: float,
-) -> File:
+) -> NiftiGz:
     """Compute sphere+signal phantom mask from a mean b=0 NIfTI image.
 
     Uses nibabel/numpy/scipy to:
@@ -206,11 +265,11 @@ def _ComputeMaskFromB0(
 
 @workflow.define
 def CreatePhantomMask(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     masks_dir: Path,
     phantom_diameter_mm: float = PHANTOM_DIAMETER_MM,
     erosion_mm: float = MASK_EROSION_MM,
-) -> File:
+) -> MifImage:
     """
     Create a binary phantom mask from the DWI data.
 
@@ -275,7 +334,32 @@ def CreatePhantomMask(
 
 @python.define
 def WriteTopupConfig(topup_dir: Path) -> File:
-    """Write a custom TOPUP config (100 non-linear iterations at 3 mm)."""
+    """
+    Write a custom TOPUP configuration file to *topup_dir*.
+
+    The configuration uses 9 resolution levels with 100 non-linear iterations
+    at the finest resolution (3 mm voxel spacing), bending-energy
+    regularisation, and spline interpolation.
+
+    Parameters
+    ----------
+    topup_dir : Path
+        Destination directory.  The file is written as
+        ``topup_dir/topup_custom.cnf``.
+
+    Returns
+    -------
+    out : File
+        Absolute path to the written ``topup_custom.cnf`` configuration file.
+
+    Steps
+    -----
+    1. Construct the output path ``topup_dir / "topup_custom.cnf"``.
+    2. Write the 9-level warp-resolution schedule with 100 non-linear
+       iterations at the finest (3 mm) level, bending-energy regularisation,
+       and cubic-spline interpolation.
+    3. Return the path to the written file.
+    """
     from pathlib import Path as _Path
 
     config_path = _Path(topup_dir) / "topup_custom.cnf"
@@ -299,8 +383,36 @@ def WriteTopupConfig(topup_dir: Path) -> File:
 
 
 @python.define
-def _LoadPaB0Mean(pa_ref_dir: Path, output_path: Path) -> File:
-    """Load PA b=0 NIfTI files from a directory and save their mean."""
+def _LoadPaB0Mean(pa_ref_dir: Path, output_path: Path) -> NiftiGz:
+    """
+    Load PA b=0 NIfTI files from a directory and save their mean to *output_path*.
+
+    If the directory contains a single 4-D file, the mean is computed along
+    the volume axis.  If multiple files are present, the per-voxel mean is
+    computed across all volumes/files.
+
+    Parameters
+    ----------
+    pa_ref_dir : Path
+        Directory containing one or more PA b=0 NIfTI files (``*.nii`` or
+        ``*.nii.gz``).  Files are processed in sorted order.
+    output_path : Path
+        Destination path for the mean PA b=0 NIfTI image.
+
+    Returns
+    -------
+    out : NiftiGz
+        Path to the saved mean PA b=0 NIfTI file (*output_path*).
+
+    Steps
+    -----
+    1. Glob *pa_ref_dir* for all ``*.nii`` and ``*.nii.gz`` files (sorted).
+    2. Raise ``FileNotFoundError`` if no files are found.
+    3. Load all images with nibabel.
+    4. If a single 4-D image is found, compute the mean along the last axis;
+       otherwise compute the per-voxel mean across all images.
+    5. Save the result to *output_path* and return the path.
+    """
     from pathlib import Path as _Path
 
     import nibabel as nib
@@ -324,7 +436,34 @@ def _LoadPaB0Mean(pa_ref_dir: Path, output_path: Path) -> File:
 
 @python.define
 def _WriteAcqparams(topup_dir: Path, readout_time: float) -> File:
-    """Write AP+PA acquisition parameters file for TOPUP."""
+    """
+    Write the AP+PA acquisition parameters file required by FSL TOPUP.
+
+    The file contains two rows: one for the AP direction (phase-encode
+    direction ``0 -1 0``) and one for the PA direction (``0 1 0``), both
+    with the same total readout time.
+
+    Parameters
+    ----------
+    topup_dir : Path
+        Destination directory.  The file is written as
+        ``topup_dir/acqparams.txt``.
+    readout_time : float
+        Total EPI readout time in seconds, written as the fourth column of
+        each row.
+
+    Returns
+    -------
+    out : File
+        Absolute path to the written ``acqparams.txt`` file.
+
+    Steps
+    -----
+    1. Construct the output path ``topup_dir / "acqparams.txt"``.
+    2. Write two rows: AP (``0 -1 0 <readout_time>``) and PA
+       (``0  1 0 <readout_time>``).
+    3. Return the path to the written file.
+    """
     from pathlib import Path as _Path
 
     acqparams = _Path(topup_dir) / "acqparams.txt"
@@ -334,11 +473,11 @@ def _WriteAcqparams(topup_dir: Path, readout_time: float) -> File:
 
 @workflow.define(outputs=["both_b0_file", "acqparams_file", "n_ap_b0"])
 def PrepareTopupData(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     pa_ref_dir: Path,
     topup_dir: Path,
     readout_time: float = 0.033,
-) -> tuple[File, File, int]:
+) -> tuple[NiftiGz, File, int]:
     """
     Prepare TOPUP input: concatenate mean AP b=0 and mean PA b=0.
 
@@ -407,8 +546,30 @@ def PrepareTopupData(
 
 
 @python.define
-def _WriteTopupIndex(dwi_nii: File) -> list[int]:
-    """Return an index list (all 1s) with one entry per DWI volume."""
+def _WriteTopupIndex(dwi_nii: NiftiGz) -> list[int]:
+    """
+    Return a per-volume index list (all ones) for use by FSL ApplyTOPUP.
+
+    The index value ``1`` maps every DWI volume to the first row of the
+    TOPUP acquisition parameters file (the AP phase-encode direction).
+
+    Parameters
+    ----------
+    dwi_nii : NiftiGz
+        4-D DWI NIfTI image.  Only the last dimension (number of volumes) is
+        used.
+
+    Returns
+    -------
+    out : list[int]
+        List of integers, all equal to ``1``, with length equal to the number
+        of volumes in *dwi_nii*.
+
+    Steps
+    -----
+    1. Load *dwi_nii* with nibabel and read the last dimension as ``nvols``.
+    2. Return a list of ``1`` repeated ``nvols`` times.
+    """
     import nibabel as nib
 
     nvols = nib.load(str(dwi_nii)).shape[-1]
@@ -417,12 +578,12 @@ def _WriteTopupIndex(dwi_nii: File) -> list[int]:
 
 @workflow.define
 def ApplyTopupToDwi(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     topup_fieldcoef: File,
     topup_movpar: File,
     acqparams_file: File,
     topup_dir: Path,
-) -> File:
+) -> MifDwi:
     """
     Apply TOPUP correction to the full DWI series (AP volumes, index=1).
 
@@ -481,11 +642,11 @@ def ApplyTopupToDwi(
 
 @workflow.define(outputs=["corrected", "fieldcoef", "movpar", "acqparams"])
 def TopupCorrectionStep(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     pa_ref_dir: Path,
     topup_dir: Path,
     readout_time: float = 0.033,
-) -> tuple[File, File, File, File]:
+) -> tuple[MifDwi, File, File, File]:
     """
     Run FSL TOPUP and apply the distortion correction to the full DWI series.
 
@@ -542,12 +703,49 @@ def TopupCorrectionStep(
 
 @python.define(outputs=["filtered_nii", "bvals_file", "bvecs_file"])
 def _FilterAndSaveVolumes(
-    dwi_nii: File,
+    dwi_nii: NiftiGz,
     fslgrad: tuple,
     output_dir: Path,
     min_bval: float = 500.0,
-) -> tuple[File, File, File]:
-    """Filter DWI volumes keeping b=0 (b < 50) and shells ≥ min_bval."""
+) -> tuple[NiftiGz, Bval, Bvec]:
+    """
+    Filter DWI volumes, retaining b=0 volumes (b < 50) and shells ≥ min_bval.
+
+    Intermediate shells (e.g. b=100, b=200) that fall between the b=0
+    threshold and *min_bval* are discarded.  The filtered image and updated
+    gradient files are saved as ``step03_5_filtered.*`` inside *output_dir*.
+
+    Parameters
+    ----------
+    dwi_nii : NiftiGz
+        4-D DWI NIfTI image to filter.
+    fslgrad : tuple
+        Two-element tuple ``(bvec_file, bval_file)`` containing the FSL-format
+        gradient files corresponding to *dwi_nii*.
+    output_dir : Path
+        Directory in which the filtered NIfTI and gradient files are written.
+    min_bval : float
+        Minimum b-value for non-zero shells to retain (default: 500).  All
+        shells with b-values in the range [50, *min_bval*) are dropped.
+
+    Returns
+    -------
+    filtered_nii : NiftiGz
+        Path to ``output_dir/step03_5_filtered.nii.gz``.
+    bvals_file : Bval
+        Path to ``output_dir/step03_5_filtered.bval``.
+    bvecs_file : Bvec
+        Path to ``output_dir/step03_5_filtered.bvec``.
+
+    Steps
+    -----
+    1. Load b-values, b-vectors, and image data with numpy/nibabel.
+    2. Build a boolean keep-mask: ``bvals < 50`` (b=0) OR
+       ``bvals >= min_bval`` (target shells).
+    3. Index the image data and gradient arrays with the keep-mask.
+    4. Save the filtered NIfTI, b-values, and b-vectors to *output_dir*.
+    5. Return the three output file paths.
+    """
     from pathlib import Path as _Path
 
     import nibabel as nib
@@ -574,10 +772,10 @@ def _FilterAndSaveVolumes(
 
 @workflow.define(outputs=["filtered_mif", "bvals_file", "bvecs_file"])
 def FilterBvalueShells(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     output_dir: Path,
     min_bval: float = 500.0,
-) -> tuple[File, File, File]:
+) -> tuple[MifDwi, Bval, Bvec]:
     """
     Remove intermediate b-value shells (e.g. b=100, b=200).
 
@@ -629,12 +827,48 @@ def FilterBvalueShells(
 
 @python.define(outputs=["index_file", "acqparams_file"])
 def _WriteEddyFiles(
-    dwi_nii: File,
+    dwi_nii: NiftiGz,
     fslgrad: tuple,
     topup_acqparams: File,
     eddy_dir: Path,
 ) -> tuple[File, File]:
-    """Write EDDY index.txt and AP-only acqparams.txt from the TOPUP params."""
+    """
+    Write the EDDY index file and an AP-only acquisition parameters file.
+
+    The index file maps every DWI volume to the first row of the acqparams
+    file (AP direction, index=1).  The acqparams file is derived from the
+    TOPUP file by retaining only the first (AP) row.
+
+    Parameters
+    ----------
+    dwi_nii : NiftiGz
+        4-D DWI NIfTI image.  Only the number of volumes is used.
+    fslgrad : tuple
+        Two-element tuple ``(bvec_file, bval_file)``; not directly used but
+        accepted for consistency with the workflow interface.
+    topup_acqparams : File
+        TOPUP acquisition parameters file (two rows: AP then PA).  Only the
+        first row is copied to the EDDY acqparams file.
+    eddy_dir : Path
+        Destination directory for the written files.
+
+    Returns
+    -------
+    index_file : File
+        Path to ``eddy_dir/index.txt`` — space-separated column of ``1`` values,
+        one per volume.
+    acqparams_file : File
+        Path to ``eddy_dir/acqparams.txt`` — single AP row extracted from
+        *topup_acqparams*.
+
+    Steps
+    -----
+    1. Load *dwi_nii* with nibabel to determine the number of volumes.
+    2. Write ``index.txt`` as a single space-separated line of ``1`` values.
+    3. Read the first line (AP row) from *topup_acqparams*.
+    4. Write that AP row to ``eddy_dir/acqparams.txt``.
+    5. Return both file paths as strings.
+    """
     from pathlib import Path as _Path
 
     import nibabel as nib
@@ -656,8 +890,33 @@ def _WriteEddyFiles(
 
 
 @python.define(outputs=["bvecs_file", "bvals_file"])
-def _UnpackGradFsl(grad_fsl: tuple) -> tuple[File, File]:
-    """Unpack an (bvec, bval) tuple into named bvecs/bvals outputs."""
+def _UnpackGradFsl(grad_fsl: tuple) -> tuple[Bvec, Bval]:
+    """
+    Unpack an FSL gradient tuple into separately named bvecs and bvals outputs.
+
+    Pydra tasks that export FSL gradient files return a single ``(bvec, bval)``
+    tuple.  This helper splits the tuple into named outputs so that downstream
+    tasks can reference each file by name.
+
+    Parameters
+    ----------
+    grad_fsl : tuple
+        Two-element tuple in FSL order ``(bvec_file, bval_file)`` as returned
+        by MrConvert's ``export_grad_fsl`` output.
+
+    Returns
+    -------
+    bvecs_file : Bvec
+        Path to the FSL-format b-vectors file (first element of *grad_fsl*).
+    bvals_file : Bval
+        Path to the FSL-format b-values file (second element of *grad_fsl*).
+
+    Steps
+    -----
+    1. Index ``grad_fsl[0]`` to extract the b-vectors file path.
+    2. Index ``grad_fsl[1]`` to extract the b-values file path.
+    3. Return both as named outputs.
+    """
     return grad_fsl[0], grad_fsl[1]
 
 
@@ -665,10 +924,10 @@ def _UnpackGradFsl(grad_fsl: tuple) -> tuple[File, File]:
     outputs=["dwi_nii", "bvals_file", "bvecs_file", "index_file", "acqparams_file"]
 )
 def PrepareEddyInputs(
-    dwi_mif: File,
+    dwi_mif: MifDwi,
     topup_acqparams: File,
     eddy_dir: Path,
-) -> tuple[File, File, File, File, File]:
+) -> tuple[NiftiGz, Bval, Bvec, File, File]:
     """
     Export DWI to NIfTI + FSL grads and generate the EDDY index file.
 
@@ -715,12 +974,40 @@ def PrepareEddyInputs(
 
 @workflow.define
 def ConvertEddyOutputToMif(
-    eddy_nii: File,
-    rotated_bvecs: File,
-    bvals_file: File,
+    eddy_nii: NiftiGz,
+    rotated_bvecs: Bvec,
+    bvals_file: Bval,
     output_mif: Path,
-) -> File:
-    """Convert the EDDY-corrected NIfTI + rotated bvecs back to MIF."""
+) -> MifDwi:
+    """
+    Convert an EDDY-corrected NIfTI image with rotated b-vectors back to MIF.
+
+    EDDY outputs a NIfTI file and a set of rotation-corrected b-vectors.
+    This workflow embeds those gradient files into the MRtrix MIF format so
+    that all downstream tools can access them from a single file.
+
+    Parameters
+    ----------
+    eddy_nii : NiftiGz
+        EDDY-corrected DWI NIfTI image.
+    rotated_bvecs : Bvec
+        FSL-format b-vectors file with per-volume rotation corrections applied
+        by EDDY (``*.eddy_rotated_bvecs``).
+    bvals_file : Bval
+        FSL-format b-values file (unchanged from EDDY input).
+    output_mif : Path
+        Destination path for the output MIF file.
+
+    Returns
+    -------
+    out : MifDwi
+        Path to the MIF DWI file at *output_mif* with embedded gradient table.
+
+    Steps
+    -----
+    1. **MrConvert** — embed *rotated_bvecs* and *bvals_file* into *eddy_nii*
+       and write the result to *output_mif* in MRtrix MIF format.
+    """
     convert = workflow.add(
         MrConvert(
             in_file=eddy_nii,
@@ -741,13 +1028,13 @@ def ConvertEddyOutputToMif(
 
 @workflow.define(outputs=["corrected_mif", "qc_dir"])
 def EddyCorrectionStep(
-    dwi_mif: File,
-    phantom_mask: File,
+    dwi_mif: MifDwi,
+    phantom_mask: MifImage,
     topup_fieldcoef: File,
     topup_movpar: File,
     topup_acqparams: File,
     eddy_dir: Path,
-) -> tuple[File, Path]:
+) -> tuple[MifDwi, Directory]:
     """
     Run FSL EDDY with ``--repol`` outlier replacement.
 
@@ -831,12 +1118,44 @@ def EddyCorrectionStep(
 
 @python.define
 def _ComputeShellAdc(
-    shell_mean_nii: File,
-    b0_mean_nii: File,
+    shell_mean_nii: NiftiGz,
+    b0_mean_nii: NiftiGz,
     b_value: float,
     output_path: Path,
-) -> File:
-    """Compute ADC = ln(S0 / S_b) / b for a single shell and save to NIfTI."""
+) -> NiftiGz:
+    """
+    Compute the apparent diffusion coefficient map for a single b-value shell.
+
+    Uses the mono-exponential model: ADC = ln(S0 / S_b) / b, where S0 is the
+    mean b=0 signal and S_b is the mean signal at shell b.  Both signals are
+    clipped to a minimum of 1e-6 to avoid division-by-zero or log-of-zero
+    errors.
+
+    Parameters
+    ----------
+    shell_mean_nii : NiftiGz
+        Mean signal image at the target b-value shell.
+    b0_mean_nii : NiftiGz
+        Mean b=0 signal image (reference S0).  Must share the same voxel
+        grid as *shell_mean_nii*.
+    b_value : float
+        The b-value (in s/mm²) of the target shell.
+    output_path : Path
+        Destination path for the ADC NIfTI image.
+
+    Returns
+    -------
+    out : NiftiGz
+        Path to the saved ADC map at *output_path*.
+
+    Steps
+    -----
+    1. Load *b0_mean_nii* and *shell_mean_nii* with nibabel; clip both to
+       a minimum of 1e-6.
+    2. Compute ``ratio = S0 / S_b`` per voxel.
+    3. Compute ``ADC = ln(ratio) / b_value`` where ratio > 0, else 0.
+    4. Save the ADC map to *output_path* and return the path.
+    """
     import nibabel as nib
     import numpy as np
 
@@ -851,12 +1170,50 @@ def _ComputeShellAdc(
 
 @python.define(outputs=["adc_map", "stats_row"])
 def _AggregateAdcMaps(
-    shell_adc_files: list[File],
-    phantom_mask: File,
+    shell_adc_files: list[NiftiGz],
+    phantom_mask: MifImage,
     output_dir: Path,
     label: str,
-) -> tuple[File, dict]:
-    """Average per-shell ADC maps and compute masked statistics."""
+) -> tuple[NiftiGz, dict]:
+    """
+    Average per-shell ADC maps and compute phantom-masked summary statistics.
+
+    All shell ADC maps are averaged into a single mean ADC volume, which is
+    saved to *output_dir*.  Masked (within-phantom) descriptive statistics are
+    returned as a dictionary for downstream CSV reporting.
+
+    Parameters
+    ----------
+    shell_adc_files : list[NiftiGz]
+        Per-shell ADC NIfTI images to average.  All must share the same voxel
+        grid.
+    phantom_mask : MifImage
+        Binary phantom mask in MIF format.  Used to restrict statistics to
+        voxels inside the phantom.
+    output_dir : Path
+        Directory in which the aggregated ADC map is written as
+        ``ADC_<label>.nii.gz``.
+    label : str
+        Pipeline step label embedded in the output filename and returned in
+        the statistics dictionary (e.g. ``"01_denoised"``).
+
+    Returns
+    -------
+    adc_map : NiftiGz
+        Path to the saved mean ADC NIfTI image.
+    stats_row : dict
+        Dictionary with keys ``label``, ``mean_adc``, ``std_adc``,
+        ``min_adc``, ``max_adc`` computed over phantom-masked voxels.
+
+    Steps
+    -----
+    1. Load all *shell_adc_files* and compute their per-voxel mean.
+    2. Save the mean ADC volume to ``output_dir/ADC_<label>.nii.gz``.
+    3. Apply *phantom_mask* to restrict statistics to phantom voxels.
+    4. Compute mean, standard deviation, minimum, and maximum ADC within the
+       mask and package them into *stats_row*.
+    5. Return the ADC map path and the statistics dictionary.
+    """
     from pathlib import Path as _Path
 
     import nibabel as nib
@@ -884,12 +1241,12 @@ def _AggregateAdcMaps(
 
 @workflow.define(outputs=["adc_map", "stats_row"])
 def ComputeAdcMaps(
-    dwi_mif: File,
-    phantom_mask: File,
+    dwi_mif: MifDwi,
+    phantom_mask: MifImage,
     output_dir: Path,
     label: str,
     shells: list[float] = ADC_SHELLS,
-) -> tuple[File, dict]:
+) -> tuple[NiftiGz, dict]:
     """
     Compute multi-shell mean ADC maps from a DWI series.
 
@@ -979,11 +1336,40 @@ def ComputeAdcMaps(
 
 @python.define(outputs=["diff_map"])
 def ComputeDifferenceMap(
-    adc_before: File,
-    adc_after: File,
+    adc_before: NiftiGz,
+    adc_after: NiftiGz,
     output_path: Path,
-) -> File:
-    """Compute the voxelwise difference (adc_after − adc_before)."""
+) -> NiftiGz:
+    """
+    Compute the voxelwise ADC difference map (adc_after − adc_before).
+
+    The difference quantifies the contribution of a single correction step to
+    the overall change in the apparent diffusion coefficient map.  The result
+    is saved in the same voxel space as the input images.
+
+    Parameters
+    ----------
+    adc_before : NiftiGz
+        ADC map from the pipeline stage before the correction of interest.
+    adc_after : NiftiGz
+        ADC map from the pipeline stage after the correction of interest.
+        Must share the same voxel grid as *adc_before*.
+    output_path : Path
+        Destination path for the difference NIfTI image.
+
+    Returns
+    -------
+    diff_map : NiftiGz
+        Path to the saved voxelwise difference map at *output_path*.
+
+    Steps
+    -----
+    1. Load *adc_before* and *adc_after* with nibabel.
+    2. Compute the per-voxel difference ``adc_after - adc_before``.
+    3. Save the result to *output_path* using the affine and header from
+       *adc_after*.
+    4. Return *output_path*.
+    """
     import nibabel as nib
 
     img_before = nib.load(str(adc_before))
@@ -1001,8 +1387,42 @@ def WriteSummaryCsv(
     csv_path: Path,
     session_name: str,
     pipeline: str,
-) -> File:
-    """Write per-step ADC summary statistics to a CSV file."""
+) -> Csv:
+    """
+    Write per-step ADC summary statistics to a CSV file.
+
+    Each row in the output corresponds to one pipeline step and contains the
+    session name, pipeline type, step label, and ADC statistics computed over
+    the phantom mask.
+
+    Parameters
+    ----------
+    stats_rows : list[dict]
+        List of statistics dictionaries, each containing keys ``label``,
+        ``mean_adc``, ``std_adc``, ``min_adc``, and ``max_adc`` as produced
+        by :func:`_AggregateAdcMaps`.
+    csv_path : Path
+        Destination path for the output CSV file.
+    session_name : str
+        Session identifier added to every row as the ``Dataset`` column.
+    pipeline : str
+        Pipeline type string (e.g. ``"cumulative"`` or ``"isolated"``) added
+        to every row as the ``Pipeline`` column.
+
+    Returns
+    -------
+    out : Csv
+        Path to the written CSV file at *csv_path*.
+
+    Steps
+    -----
+    1. Convert each entry in *stats_rows* to a flat dictionary with columns
+       ``Dataset``, ``Pipeline``, ``Step``, ``Mean_ADC``, ``StdDev_ADC``,
+       ``Min_ADC``, and ``Max_ADC``.
+    2. Build a pandas DataFrame from the list of row dictionaries.
+    3. Write the DataFrame to *csv_path* as a CSV (without the row index).
+    4. Return *csv_path*.
+    """
     import pandas as pd
 
     rows = [
@@ -1043,13 +1463,25 @@ def WriteSummaryCsv(
 )
 def CumulativeDwiPipeline(
     input_image: NiftiGz,
-    bvals_file: File,
-    bvecs_file: File,
+    bvals_file: Bval,
+    bvecs_file: Bvec,
     pa_ref_dir: Path,
     output_base_dir: Path | None = None,
     readout_time: float = 0.033,
     enable_eddy: bool = True,
-) -> tuple[File, File, File, File, File, File | None, File, File, Path, Path, File]:
+) -> tuple[
+    MifDwi,
+    MifDwi,
+    MifDwi,
+    MifDwi,
+    MifDwi,
+    MifDwi | None,
+    MifDwi,
+    MifImage,
+    Directory,
+    Directory,
+    Csv,
+]:
     """
     Cumulative SPIRIT phantom DWI correction pipeline.
 
@@ -1063,9 +1495,9 @@ def CumulativeDwiPipeline(
     ----------
     input_image : NiftiGz
         Primary AP-direction DWI NIfTI image.
-    bvals_file : File
+    bvals_file : Bval
         FSL-format b-values file.
-    bvecs_file : File
+    bvecs_file : Bvec
         FSL-format b-vectors file.
     pa_ref_dir : Path
         Directory containing the PA b=0 reference image(s) for TOPUP.
@@ -1075,6 +1507,54 @@ def CumulativeDwiPipeline(
         Total EPI readout time in seconds (default: 0.033 s).
     enable_eddy : bool
         Run FSL EDDY (default: True).
+
+    Returns
+    -------
+    step00_original : MifDwi
+        Original DWI converted to MIF format (step 0).
+    step01_denoised : MifDwi
+        Denoised DWI (step 1).
+    step02_degibbs : MifDwi
+        Gibbs-ringing-corrected DWI (step 2).
+    step03_topup : MifDwi
+        TOPUP-corrected DWI (step 3).
+    step03_5_filtered : MifDwi
+        TOPUP-corrected DWI with intermediate b-value shells removed (step 3.5).
+    step04_eddy : MifDwi or None
+        EDDY-corrected DWI (step 4), or ``None`` if *enable_eddy* is ``False``.
+    step06_biascorr : MifDwi
+        Bias-field-corrected DWI (step 6).
+    phantom_mask : MifImage
+        Binary phantom mask derived from the mean b=0 image.
+    adc_maps_dir : Directory
+        Directory containing per-step ADC maps and the pipeline summary CSV.
+    diff_maps_dir : Directory
+        Directory containing step-wise Δ ADC difference maps.
+    summary_csv : Csv
+        Summary CSV with ADC statistics for every pipeline step.
+
+    Steps
+    -----
+    1. **PrepareOutputDirs** — create all output sub-directories and derive
+       the session name.
+    2. **MrConvert** (step 0) — embed FSL gradient files and convert the
+       input NIfTI to MIF format.
+    3. **DwiDenoise** (step 1) — Marchenko-Pastur PCA denoising.
+    4. **MrDegibbs** (step 2) — Gibbs ringing removal along axes [0, 1].
+    5. **CreatePhantomMask** — compute a sphere+signal binary mask from the
+       mean b=0 image of the degibbed data.
+    6. **TopupCorrectionStep** (step 3) — estimate and apply susceptibility
+       distortion correction with FSL TOPUP.
+    7. **FilterBvalueShells** (step 3.5) — remove intermediate b-value
+       shells, keeping b=0 and b ≥ 500.
+    8. **EddyCorrectionStep** (step 4, optional) — eddy-current and motion
+       correction with FSL EDDY + EddyQuad QC report.
+    9. **DwiBiascorrectAnts** (step 6) — N4 bias field correction via ANTs.
+    10. **ComputeAdcMaps** — compute multi-shell mean ADC maps at every
+        pipeline stage (steps 0, 1, 2, 3, 3.5, 4 [optional], 6).
+    11. **ComputeDifferenceMap** — compute step-wise Δ ADC maps between
+        consecutive stages and the total correction difference (step 0 → 6).
+    12. **WriteSummaryCsv** — aggregate ADC statistics into a single CSV.
     """
     paths = workflow.add(
         PrepareOutputDirs(
@@ -1366,20 +1846,81 @@ def CumulativeDwiPipeline(
 )
 def IsolatedDwiPipeline(
     input_image: NiftiGz,
-    bvals_file: File,
-    bvecs_file: File,
+    bvals_file: Bval,
+    bvecs_file: Bvec,
     pa_ref_dir: Path,
-    phantom_mask: File,
+    phantom_mask: MifImage,
     output_base_dir: Path | None = None,
     readout_time: float = 0.033,
     enable_eddy: bool = True,
-) -> tuple[File, File, File, File | None, File, Path, File]:
+) -> tuple[MifDwi, MifDwi, MifDwi, MifDwi | None, MifDwi, Directory, Csv]:
     """
-    Isolated correction pipeline: each correction applied independently
-    to the original DWI (not accumulated) for ablation analysis.
+    Isolated correction pipeline: each correction applied independently to the
+    original DWI for ablation analysis.
 
-    The phantom mask is inherited from the cumulative pipeline to ensure
-    consistent ROI definitions across both analyses.
+    Unlike :func:`CumulativeDwiPipeline`, corrections here are not accumulated.
+    Instead, each correction (denoise, degibbs, TOPUP+EDDY, bias) is applied
+    independently to the original converted DWI so that the isolated effect of
+    each step on the ADC can be measured.  The phantom mask is inherited from
+    the cumulative pipeline to ensure consistent ROI definitions across both
+    analyses.
+
+    Parameters
+    ----------
+    input_image : NiftiGz
+        Primary AP-direction DWI NIfTI image.
+    bvals_file : Bval
+        FSL-format b-values file.
+    bvecs_file : Bvec
+        FSL-format b-vectors file.
+    pa_ref_dir : Path
+        Directory containing the PA b=0 reference image(s) for TOPUP.
+    phantom_mask : MifImage
+        Binary phantom mask inherited from :func:`CumulativeDwiPipeline`.
+    output_base_dir : Path, optional
+        Root output directory.  Session sub-directory is created automatically.
+    readout_time : float
+        Total EPI readout time in seconds (default: 0.033 s).
+    enable_eddy : bool
+        Run FSL EDDY in the isolated TOPUP+EDDY branch (default: True).
+
+    Returns
+    -------
+    iso_denoised : MifDwi
+        DWI with only denoising applied to the original.
+    iso_degibbs : MifDwi
+        DWI with only Gibbs ringing removal applied to the original.
+    iso_topup : MifDwi
+        DWI with only TOPUP susceptibility correction applied to the original.
+    iso_eddy : MifDwi or None
+        DWI with TOPUP+filter+EDDY applied to the original, or ``None`` if
+        *enable_eddy* is ``False``.
+    iso_biascorr : MifDwi
+        DWI with only ANTs bias field correction applied to the original.
+    adc_maps_iso_dir : Directory
+        Directory containing isolated pipeline ADC maps and summary CSV.
+    summary_csv : Csv
+        Summary CSV with ADC statistics for each isolated correction branch.
+
+    Steps
+    -----
+    1. **PrepareOutputDirs** — create isolated pipeline output sub-directories.
+    2. **MrConvert** (step 0) — convert the original NIfTI to MIF format with
+       embedded gradient files.
+    3. **DwiDenoise** (iso step 1) — apply denoising only to the original DWI.
+    4. **MrDegibbs** (iso step 2) — apply Gibbs ringing removal only to the
+       original DWI.
+    5. **TopupCorrectionStep** (iso step 3) — apply TOPUP only to the original
+       DWI using the isolated TOPUP directory.
+    6. **FilterBvalueShells** (iso step 3.5) — remove intermediate shells from
+       the isolated TOPUP output.
+    7. **EddyCorrectionStep** (iso step 4, optional) — apply TOPUP+filter+EDDY
+       to the original DWI.
+    8. **DwiBiascorrectAnts** (iso step 6) — apply bias field correction only
+       to the original DWI.
+    9. **ComputeAdcMaps** — compute ADC maps for each isolated branch
+       (denoised, degibbs, topup, topup+eddy [optional], biascorr).
+    10. **WriteSummaryCsv** — write isolated pipeline ADC statistics to CSV.
     """
     paths = workflow.add(
         PrepareOutputDirs(
@@ -1567,13 +2108,13 @@ def IsolatedDwiPipeline(
 )
 def DiffusionMetricsAnalysis(
     input_image: NiftiGz,
-    bvals_file: File,
-    bvecs_file: File,
+    bvals_file: Bval,
+    bvecs_file: Bvec,
     pa_ref_dir: Path,
     output_base_dir: Path | None = None,
     readout_time: float = 0.033,
     enable_eddy: bool = True,
-) -> tuple[Path, Path, Path, File, File]:
+) -> tuple[Directory, Directory, Directory, Csv, Csv]:
     """
     Full SPIRIT phantom DWI analysis workflow.
 
@@ -1586,9 +2127,9 @@ def DiffusionMetricsAnalysis(
         Primary AP-direction DWI NIfTI image (e.g. the main DMRI acquisition).
         All b-value shells present in the file are used; intermediate shells
         (b=100, b=200) are automatically removed before EDDY.
-    bvals_file : File
+    bvals_file : Bval
         FSL-format b-values file corresponding to *input_image*.
-    bvecs_file : File
+    bvecs_file : Bvec
         FSL-format b-vectors file corresponding to *input_image*.
     pa_ref_dir : Path
         Directory containing the PA (posterior–anterior) b=0 reference
@@ -1612,11 +2153,20 @@ def DiffusionMetricsAnalysis(
         Isolated pipeline ADC maps directory.
     diff_maps_dir : Path
         Step-wise Δ ADC difference maps directory.
-    summary_csv : File
+    summary_csv : Csv
         Cumulative pipeline summary CSV
         (columns: Dataset, Pipeline, Step, Mean_ADC, StdDev_ADC, Min_ADC, Max_ADC).
-    summary_iso_csv : File
+    summary_iso_csv : Csv
         Isolated pipeline summary CSV (same columns).
+
+    Steps
+    -----
+    1. **CumulativeDwiPipeline** — run the full sequential correction chain
+       (Convert → Denoise → Degibbs → TOPUP → b-value filter → EDDY →
+       Bias correct), producing ADC maps, difference maps, and a summary CSV.
+    2. **IsolatedDwiPipeline** — apply each correction independently to the
+       original DWI using the phantom mask from step 1, producing isolated ADC
+       maps and a separate summary CSV.
     """
     cumulative = workflow.add(
         CumulativeDwiPipeline(
@@ -1657,8 +2207,8 @@ def DiffusionMetricsAnalysis(
 @workflow.define(outputs=["results"])
 def DiffusionMetricsAnalysisBatch(
     input_images: list[NiftiGz],
-    bvals_files: list[File],
-    bvecs_files: list[File],
+    bvals_files: list[Bval],
+    bvecs_files: list[Bvec],
     pa_ref_dirs: list[Path],
     output_base_dir: Path,
     readout_time: float = 0.033,
@@ -1674,9 +2224,9 @@ def DiffusionMetricsAnalysisBatch(
     ----------
     input_images : list[NiftiGz]
         One primary DWI image per session.
-    bvals_files : list[File]
+    bvals_files : list[Bval]
         Corresponding b-values files (same order as *input_images*).
-    bvecs_files : list[File]
+    bvecs_files : list[Bvec]
         Corresponding b-vectors files (same order as *input_images*).
     pa_ref_dirs : list[Path]
         Corresponding PA reference directories (same order as *input_images*).
@@ -1686,6 +2236,22 @@ def DiffusionMetricsAnalysisBatch(
         Total EPI readout time in seconds (default: 0.033 s).
     enable_eddy : bool
         Include FSL EDDY correction (default: True).
+
+    Returns
+    -------
+    results : list
+        List of cumulative pipeline ``summary_csv`` outputs from each
+        :func:`DiffusionMetricsAnalysis` call, one entry per session, in the
+        same order as *input_images*.
+
+    Steps
+    -----
+    1. **DiffusionMetricsAnalysis** — run the full single-session analysis
+       (cumulative + isolated pipelines) for every element of *input_images*
+       in parallel (pydra ``split`` on ``input_image``, ``bvals_file``,
+       ``bvecs_file``, and ``pa_ref_dir``).
+    2. Collect the per-session ``summary_csv`` outputs into a single list
+       (pydra ``combine`` on ``input_image``).
     """
     process = workflow.add(
         DiffusionMetricsAnalysis(
