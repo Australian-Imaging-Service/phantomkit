@@ -49,9 +49,9 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v2
       with:
-        fail_ci_if_error: false
+        fail_ci_if_error: true
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: Australian-Imaging-Service/phantomkit
+        slug: australian-imaging-service/phantomkit
 
   build:
     needs: [test]
