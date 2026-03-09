@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 180" width="520" height="180">
+  <defs>
+    <radialGradient id="scan-bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#2a1540"/>
+      <stop offset="85%" stop-color="#110b1e"/>
+      <stop offset="100%" stop-color="#0a0612"/>
+    </radialGradient>
+    <radialGradient id="vial-eye" cx="32%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#f0e6ff"/>
+      <stop offset="45%" stop-color="#c39bd3"/>
+      <stop offset="100%" stop-color="#7b3fa0"/>
+    </radialGradient>
+    <radialGradient id="vial-mid" cx="32%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#d7b8ea"/>
+      <stop offset="55%" stop-color="#9b59b6"/>
+      <stop offset="100%" stop-color="#5e2a80"/>
+    </radialGradient>
+    <radialGradient id="vial-sm" cx="32%" cy="32%" r="65%">
+      <stop offset="0%" stop-color="#c39bd3"/>
+      <stop offset="60%" stop-color="#7d3c98"/>
+      <stop offset="100%" stop-color="#4a1f6b"/>
+    </radialGradient>
+    <filter id="soft-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="eye-glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="circle-clip">
+      <circle cx="90" cy="90" r="82"/>
+    </clipPath>
+  </defs>
+
+  <!-- ── Phantom cross-section circle ── -->
+  <circle cx="90" cy="90" r="84" fill="#0a0612" stroke="#3d1a5c" stroke-width="1.5"/>
+  <circle cx="90" cy="90" r="82" fill="url(#scan-bg)"/>
+
+  <!-- Subtle measurement grid (clipped to circle) -->
+  <g clip-path="url(#circle-clip)" opacity="0.18" stroke="#9b59b6" stroke-width="0.6">
+    <line x1="8"  y1="90" x2="172" y2="90"/>
+    <line x1="90" y1="8"  x2="90"  y2="172"/>
+    <line x1="32" y1="32" x2="148" y2="148"/>
+    <line x1="148" y1="32" x2="32" y2="148"/>
+  </g>
+
+  <!-- Dashed measurement ring -->
+  <circle cx="90" cy="90" r="68" fill="none" stroke="#7b3fa0"
+          stroke-width="0.9" stroke-dasharray="5 3.5" opacity="0.55"/>
+
+  <!-- Outer calibration tick marks -->
+  <g stroke="#9b59b6" stroke-width="1.2" opacity="0.45">
+    <line x1="90" y1="8"  x2="90" y2="16"/>
+    <line x1="90" y1="164" x2="90" y2="172"/>
+    <line x1="8"  y1="90" x2="16" y2="90"/>
+    <line x1="164" y1="90" x2="172" y2="90"/>
+    <!-- diagonal ticks -->
+    <line x1="31" y1="31" x2="37" y2="37"/>
+    <line x1="149" y1="31" x2="143" y2="37"/>
+    <line x1="31" y1="149" x2="37" y2="143"/>
+    <line x1="149" y1="149" x2="143" y2="143"/>
+  </g>
+
+  <!-- ── Vials arranged in The Phantom skull-ring pattern ── -->
+
+  <!-- Cranium arc — 5 vials spread wide -->
+  <circle cx="64"  cy="51" r="5.5" fill="url(#vial-sm)" opacity="0.78"/>
+  <circle cx="78"  cy="42" r="5.5" fill="url(#vial-sm)" opacity="0.78"/>
+  <circle cx="90"  cy="38" r="5.5" fill="url(#vial-sm)" opacity="0.78"/>
+  <circle cx="102" cy="42" r="5.5" fill="url(#vial-sm)" opacity="0.78"/>
+  <circle cx="116" cy="51" r="5.5" fill="url(#vial-sm)" opacity="0.78"/>
+
+  <!-- Cheekbone vials (zygomatic arch — mid-face, inward from temples) -->
+  <circle cx="53" cy="97" r="6.5" fill="url(#vial-sm)" opacity="0.72"/>
+  <circle cx="127" cy="97" r="6.5" fill="url(#vial-sm)" opacity="0.72"/>
+
+  <!-- Eye sockets — hollow dark centres with glowing rim -->
+  <circle cx="71"  cy="76" r="13" fill="#0f0720" stroke="#c39bd3" stroke-width="2"
+          filter="url(#eye-glow)" opacity="0.95"/>
+  <circle cx="71"  cy="76" r="7"  fill="#060310" opacity="0.9"/>
+  <circle cx="109" cy="76" r="13" fill="#0f0720" stroke="#c39bd3" stroke-width="2"
+          filter="url(#eye-glow)" opacity="0.95"/>
+  <circle cx="109" cy="76" r="7"  fill="#060310" opacity="0.9"/>
+
+  <!-- Nasal aperture — single hollow inverted triangle -->
+  <polygon points="83,97 97,97 90,112"
+           fill="#060310" stroke="#9b59b6" stroke-width="1.5"
+           stroke-linejoin="round" filter="url(#soft-glow)" opacity="0.9"/>
+
+  <!-- Teeth — 4 long rectangular blocks, centred, iconic Phantom skull-ring style -->
+  <!-- total width = 4×11 + 3×2 = 50; left edge = 90−25 = 65 -->
+  <defs>
+    <linearGradient id="tooth-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e0c8f5"/>
+      <stop offset="100%" stop-color="#9b59b6"/>
+    </linearGradient>
+  </defs>
+  <rect x="65"  y="116" width="11" height="24" rx="2.5" ry="2.5" fill="url(#tooth-grad)" filter="url(#soft-glow)" opacity="0.92"/>
+  <rect x="78"  y="116" width="11" height="24" rx="2.5" ry="2.5" fill="url(#tooth-grad)" filter="url(#soft-glow)" opacity="0.92"/>
+  <rect x="91"  y="116" width="11" height="24" rx="2.5" ry="2.5" fill="url(#tooth-grad)" filter="url(#soft-glow)" opacity="0.92"/>
+  <rect x="104" y="116" width="11" height="24" rx="2.5" ry="2.5" fill="url(#tooth-grad)" filter="url(#soft-glow)" opacity="0.92"/>
+
+  <!-- ── Wordmark ── -->
+  <!-- "PHANTOM" in bold purple -->
+  <text x="196" y="88"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="44" font-weight="800" letter-spacing="1"
+        fill="#9b59b6">PHANTOM</text>
+
+  <!-- "KIT" in light lavender, wider tracking -->
+  <text x="202" y="132"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="44" font-weight="200" letter-spacing="18"
+        fill="#d7b8ea">KIT</text>
+
+  <!-- Thin rule -->
+  <line x1="196" y1="142" x2="510" y2="142" stroke="#6b2d8b" stroke-width="0.8" opacity="0.7"/>
+
+  <!-- Tagline -->
+  <text x="198" y="161"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="11.5" font-style="italic" letter-spacing="0.5"
+        fill="#9b59b6" opacity="0.85">Every ghost leaves a mark. We measure it.</text>
+</svg>
