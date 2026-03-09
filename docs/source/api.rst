@@ -1,4 +1,4 @@
 API
 ===
 
-.. automodule:: qa_metrics.phantoms.gsp_spirit
+.. autofunction:: phantomkit.protocols.gsp_spirit.GspSpiritAnalysis

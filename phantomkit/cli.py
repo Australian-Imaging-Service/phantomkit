@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from phantomkit.workflow import PhantomSessionWorkflow, BatchWorkflow
+from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis, GspSpiritAnalysisBatch
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def single(input_image, template_dir, output_dir, rotation_lib) -> None:
     """Process one session."""
     import pydra
 
-    wf = PhantomSessionWorkflow(
+    wf = GspSpiritAnalysis(
         input_image=input_image,
         template_dir=template_dir,
         output_base_dir=output_dir,
@@ -70,7 +70,7 @@ def batch(data_dir, template_dir, output_dir, rotation_lib, pattern, plugin) -> 
     for img in images:
         logger.info("  %s", img)
 
-    wf = BatchWorkflow(
+    wf = GspSpiritAnalysisBatch(
         input_images=images,
         template_dir=template_dir,
         output_base_dir=output_dir,

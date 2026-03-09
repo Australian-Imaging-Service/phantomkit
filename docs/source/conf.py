@@ -17,7 +17,7 @@ from pathlib import Path
 import re
 import datetime
 
-from fileformats.core import __version__  # noqa
+from phantomkit import __version__  # noqa
 
 with open(Path(__file__).parent / ".." / ".." / "AUTHORS") as f:
     authors = []

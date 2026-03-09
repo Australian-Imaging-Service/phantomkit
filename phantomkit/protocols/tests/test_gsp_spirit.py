@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-from phantomkit.workflow import (
+from phantomkit.protocols.gsp_spirit import (
     GetContrastFiles,
     GetVialMasks,
     PrepareSessionPaths,
@@ -85,10 +85,10 @@ def test_get_contrast_files_excludes_non_nifti(tmp_path: Path):
 # ── Top-level workflow graph construction (no execution) ──────────────────────
 
 
-def test_phantom_session_workflow_builds():
-    from phantomkit.workflow import PhantomSessionWorkflow
+def test_gsp_spirit_build():
+    from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
 
-    wf = PhantomSessionWorkflow(
+    wf = GspSpiritAnalysis(
         input_image="/fake/session/t1.nii.gz",
         template_dir="/fake/template",
         output_base_dir="/fake/output",
@@ -97,10 +97,10 @@ def test_phantom_session_workflow_builds():
     assert wf is not None
 
 
-def test_batch_workflow_builds():
-    from phantomkit.workflow import BatchWorkflow
+def test_gsp_spirit_batch_build():
+    from phantomkit.protocols.gsp_spirit import GspSpiritAnalysisBatch
 
-    wf = BatchWorkflow(
+    wf = GspSpiritAnalysisBatch(
         input_images=["/fake/session1/t1.nii.gz", "/fake/session2/t1.nii.gz"],
         template_dir="/fake/template",
         output_base_dir="/fake/output",

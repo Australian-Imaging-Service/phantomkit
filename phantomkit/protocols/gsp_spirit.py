@@ -97,7 +97,7 @@ def GetContrastFiles(input_image: str) -> list[str]:
         "scanner_space_image",
     ]
 )
-def PhantomSessionWorkflow(
+def GspSpiritAnalysis(
     input_image: str,
     template_dir: str,
     output_base_dir: str,
@@ -226,7 +226,7 @@ def PhantomSessionWorkflow(
 
 
 @workflow.define(outputs=["results"])
-def BatchWorkflow(
+def GspSpiritAnalysisBatch(
     input_images: list[str],
     template_dir: str,
     output_base_dir: str,
@@ -239,7 +239,7 @@ def BatchWorkflow(
     split across input_images and results collected back into a list.
     """
     process = workflow.add(
-        PhantomSessionWorkflow(
+        GspSpiritAnalysis(
             input_image=input_images,
             template_dir=template_dir,
             output_base_dir=output_base_dir,

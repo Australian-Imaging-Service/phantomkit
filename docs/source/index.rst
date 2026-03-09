@@ -1,100 +1,55 @@
 .. _home:
 
-PhantomQAMetrics
-===========
-.. image:: https://github.com/arcanaframework/fileformats/actions/workflows/ci-cd.yml/badge.svg
-   :target: https://github.com/arcanaframework/fileformats/actions/workflows/ci-cd.yml
-.. image:: https://codecov.io/gh/arcanaframework/fileformats/branch/main/graph/badge.svg?token=UIS0OGPST7
-   :target: https://codecov.io/gh/arcanaframework/fileformats
-.. image:: https://img.shields.io/pypi/pyversions/fileformats.svg
-   :target: https://pypi.python.org/pypi/fileformats/
+PhantomKit
+==========
+.. image:: https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml/badge.svg
+   :target: https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml
+.. image:: https://codecov.io/gh/australian-imaging-service/phantomkit/branch/main/graph/badge.svg?token=UIS0OGPST7
+   :target: https://codecov.io/gh/australian-imaging-service/phantomkit
+.. image:: https://img.shields.io/pypi/pyversions/phantomkit.svg
+   :target: https://pypi.python.org/pypi/phantomkit/
    :alt: Supported Python versions
-.. image:: https://img.shields.io/pypi/v/fileformats.svg
-   :target: https://pypi.python.org/pypi/fileformats/
+.. image:: https://img.shields.io/pypi/v/phantomkit.svg
+   :target: https://pypi.python.org/pypi/phantomkit/
    :alt: Latest Version
-.. image:: https://img.shields.io/github/stars/ArcanaFramework/fileformats?label=GitHub
-   :alt: GitHub stars
-   :target: https://github.com/ArcanaFramework/fileformats
 
+*PhantomKit* is a Python toolkit for automated quality assurance (QA) of medical imaging
+scanners using physical phantoms. It provides pydra-based workflows that register phantom
+scans to a reference template, extract per-vial signal statistics across multiple contrast
+types, and generate publication-quality plots — supporting both MRI and PET phantom
+protocols.
 
-*Fileformats* is a library of Python classes that correspond to different file formats
-for file-type detection/validation, MIME-type lookup and file handling. The format classes also
-provide hooks for methods to read and manipulate the data contained in the files to
-facilitate the writing of duck-typed code. Unlike other Python packages, multi-file data
-formats, e.g. with separate header/data files or directories containing specific files,
-are supported, and can be handled just like single file types.
+Key features:
 
-File-format types are typically identified by a combination of file extensions
-and "magic numbers", where applicable. In these cases new formats can be defined in just
-a few lines. However, for more exotic file formats like
-`MRtrix Image Header <https://mrtrix.readthedocs.io/en/dev/getting_started/image_data.html#mrtrix-image-formats>`__,
-which requires inspection of headers to locate other members of the "file set",
-*PhantomQAMetrics* provides a framework to add custom detection methods.
-
-Extensions and Extras
----------------------
-
-The main *PhantomQAMetrics* package covers all file-types with registered MIME types (see
-`IANA MIME-types`_). Additional, domain-specific formats can be added via *PhantomQAMetrics* **extension**
-framework, such as `fileformats-medimage <https://pypi.org/project/fileformats-medimage>`__
-for medical imaging data, and `fileformats-datascience <https://pypi.org/project/fileformats-datascience>`__
-for formats commonly found in datascience. These extension packages are understandably
-not comprehensive, but expected to grow as new use cases are found and new formats added
-(see :ref:`Extensions`).
-
-The main *PhantomQAMetrics* and its extension packages don't have any external dependencies.
-Extra functionality that requires external dependencies, such as libraries to read and
-write the file data, are implemented in separate **extras** packages (see :ref:`Extras`),
-e.g. `fileformats-extras <https://pypi.org/project/fileformats-extras/>`__,
-`fileformats-medimage-extras <https://pypi.org/project/fileformats-medimage-extras/>`__),
-to keep the base packages for format detection and file handling extremely
-light-weight.
+- **Template-based registration** — iterative ANTs SyN registration with automatic
+  orientation search across a rotation library
+- **Vial metric extraction** — per-vial mean, median, std, min and max across all
+  contrast images, written to CSV
+- **Plotting** — scatter plots of vial intensity and parametric map plots (T1/IR, T2/TE)
+  with mrview ROI overlays
+- **Protocol support** — extensible ``protocols`` sub-package for phantom- and
+  project-specific workflow configurations
+- **Parallel batch processing** — pydra-native splitting and combining for multi-session
+  datasets
 
 
 Installation
 ------------
 
-*PhantomQAMetrics* can be installed for Python >=3.8 using *pip*
+*PhantomKit* can be installed for Python >=3.11 using *pip*:
 
 .. code-block:: console
 
-    $ python3 -m pip install fileformats
-
-Extension packages can be installed similarly
-
-.. code-block:: bash
-
-    $ python3 -m pip install fileformats-medimage fileformats-datascience
-
-These installations have no dependencies and provide basic format detection and
-file handling functionality. However, for metadata inspection and format conversion methods
-that require external dependencies, you will need install the ``fileformats-extras`` package.
-
-.. code-block:: console
-
-    $ python3 -m pip install fileformats-extras
-
-
-and likewise for the extension packages
-
-.. code-block:: bash
-
-    $ python3 -m pip install fileformats-medimage-extras fileformats-datascience-extras
-
-.. note::
-   See the :ref:`Extensions` and :ref:`Extras` for instructions on how to implement your
-   own extensions and extras, respectively.
+    $ python3 -m pip install phantomkit
 
 
 License
 -------
 
-This work is licensed under a
-`Creative Commons Attribution 4.0 International License <http://creativecommons.org/licenses/by/4.0/>`_
+*PhantomKit* is released under the
+`Apache License 2.0 <https://www.apache.org/licenses/LICENSE-2.0>`_.
 
-.. image:: https://i.creativecommons.org/l/by/4.0/88x31.png
-  :target: http://creativecommons.org/licenses/by/4.0/
-  :alt: Creative Commons Attribution 4.0 International License
+Copyright 2026 Australian Imaging Service.
 
 
 .. toctree::
@@ -102,36 +57,3 @@ This work is licensed under a
     :hidden:
 
     quick_start
-    detection
-    file_handling
-    mime
-    read_write
-    typing
-    api
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Available Types
-   :hidden:
-
-   reference/application
-   reference/audio
-   reference/image
-   reference/model
-   reference/text
-   reference/video
-   reference/datascience
-   reference/medimage
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Developer Guide
-   :hidden:
-
-   developer/extensions
-   developer/extras
-
-
-.. _Pydra: https://pydra.readthedocs.io
-.. _Fastr: https://gitlab.com/radiology/infrastructure/fastr
-.. _`IANA MIME-types`: https://www.iana.org/assignments/media-types/media-types.xhtml
