@@ -21,11 +21,14 @@ from pydra.compose import python, workflow
 from pydra.tasks.mrtrix3.v3_1 import (
     DwiBiascorrect_Ants as DwiBiascorrectAnts,
     DwiDenoise,
+    DwiExtract,
+    MrCat,
     MrConvert,
     MrDegibbs,
     MrGrid,
+    MrMath,
 )
-from pydra.tasks.fsl.v6 import TOPUP, Eddy, EddyQuad
+from pydra.tasks.fsl.v6 import TOPUP, ApplyTOPUP, Eddy, EddyQuad
 
 logger = logging.getLogger(__name__)
 
@@ -133,24 +136,22 @@ def PrepareOutputDirs(
 
 
 @python.define
-def CreatePhantomMask(
-    dwi_mif: File,
+def _ComputeMaskFromB0(
+    b0_mean_nii: File,
     masks_dir: Path,
-    phantom_diameter_mm: float = PHANTOM_DIAMETER_MM,
-    erosion_mm: float = MASK_EROSION_MM,
+    phantom_diameter_mm: float,
+    erosion_mm: float,
 ) -> File:
-    """
-    Create a binary phantom mask from the DWI data.
+    """Compute sphere+signal phantom mask from a mean b=0 NIfTI image.
 
-    1. Extract and average b=0 volumes.
-    2. Find the intensity-weighted centroid.
-    3. Generate a sphere of *phantom_diameter_mm* centred at the centroid.
-    4. Intersect with a signal intensity threshold.
-    5. Fill holes and erode by *erosion_mm*.
+    Uses nibabel/numpy/scipy to:
+    1. Find the intensity-weighted centroid.
+    2. Generate a sphere of *phantom_diameter_mm* centred at the centroid.
+    3. Intersect with a signal intensity threshold.
+    4. Fill holes and erode by *erosion_mm*.
 
-    Returns the path to ``phantom_mask_canonical.mif``.
+    Returns the path to ``phantom_mask_canonical.nii.gz``.
     """
-    import subprocess
     from pathlib import Path as _Path
 
     import nibabel as nib
@@ -158,37 +159,7 @@ def CreatePhantomMask(
     from scipy import ndimage
 
     masks_dir = _Path(masks_dir)
-    tmp = masks_dir / "tmp_mask"
-    tmp.mkdir(parents=True, exist_ok=True)
-
-    # Extract mean b=0
-    subprocess.run(
-        [
-            "dwiextract",
-            "-bzero",
-            str(dwi_mif),
-            str(tmp / "b0.mif"),
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-    b0_mean_nii = str(tmp / "b0_mean.nii.gz")
-    subprocess.run(
-        [
-            "mrmath",
-            str(tmp / "b0.mif"),
-            "mean",
-            b0_mean_nii,
-            "-axis",
-            "3",
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-
-    img = nib.load(b0_mean_nii)
+    img = nib.load(str(b0_mean_nii))
     data = img.get_fdata()
     affine = img.affine
     voxel_sizes = np.abs(np.diag(affine)[:3])
@@ -230,21 +201,71 @@ def CreatePhantomMask(
 
     out_nii = masks_dir / "phantom_mask_canonical.nii.gz"
     nib.save(nib.Nifti1Image(eroded, affine, img.header), str(out_nii))
+    return out_nii
 
-    out_mif = masks_dir / "phantom_mask_canonical.mif"
-    subprocess.run(
-        [
-            "mrconvert",
-            str(out_nii),
-            str(out_mif),
-            "-datatype",
-            "uint8",
-            "-force",
-            "-quiet",
-        ],
-        check=True,
+
+@workflow.define
+def CreatePhantomMask(
+    dwi_mif: File,
+    masks_dir: Path,
+    phantom_diameter_mm: float = PHANTOM_DIAMETER_MM,
+    erosion_mm: float = MASK_EROSION_MM,
+) -> File:
+    """
+    Create a binary phantom mask from the DWI data.
+
+    1. **DwiExtract** extracts b=0 volumes into ``masks_dir``.
+    2. **MrMath** computes the mean b=0.
+    3. **_ComputeMaskFromB0** generates a sphere+signal mask with nibabel/scipy.
+    4. **MrConvert** converts the NIfTI mask to MIF format (uint8).
+
+    Returns the path to ``phantom_mask_canonical.mif``.
+    """
+    extract = workflow.add(
+        DwiExtract(
+            in_file=dwi_mif,
+            bzero=True,
+            out_file=masks_dir / "b0.mif",
+            force=True,
+            quiet=True,
+        ),
+        name="extract_b0",
     )
-    return out_mif
+
+    mean_b0 = workflow.add(
+        MrMath(
+            in_file=extract.out_file,
+            operation="mean",
+            out_file=masks_dir / "b0_mean.nii.gz",
+            axis=3,
+            force=True,
+            quiet=True,
+        ),
+        name="mean_b0",
+    )
+
+    mask_nii = workflow.add(
+        _ComputeMaskFromB0(
+            b0_mean_nii=mean_b0.out_file,
+            masks_dir=masks_dir,
+            phantom_diameter_mm=phantom_diameter_mm,
+            erosion_mm=erosion_mm,
+        ),
+        name="compute_mask",
+    )
+
+    mask_mif = workflow.add(
+        MrConvert(
+            in_file=mask_nii.out,
+            out_file=masks_dir / "phantom_mask_canonical.mif",
+            datatype="uint8",
+            force=True,
+            quiet=True,
+        ),
+        name="convert_mask",
+    )
+
+    return mask_mif.out_file
 
 
 # ============================================================================
@@ -277,61 +298,16 @@ def WriteTopupConfig(topup_dir: Path) -> File:
     return config_path
 
 
-@python.define(outputs=["both_b0_file", "acqparams_file", "n_ap_b0"])
-def PrepareTopupData(
-    dwi_mif: File,
-    pa_ref_dir: Path,
-    topup_dir: Path,
-    readout_time: float = 0.033,
-) -> tuple[File, File, int]:
-    """
-    Prepare TOPUP input: concatenate mean AP b=0 and mean PA b=0.
-
-    The AP b=0 is extracted from the DWI series (mean across all b=0 volumes).
-    The PA b=0 is taken from *pa_ref_dir* (averaged if multi-volume).
-
-    Returns the 4-D concatenated NIfTI, the acqparams.txt, and the number
-    of AP b=0 volumes (always 1 — we use the mean).
-    """
-    import subprocess
+@python.define
+def _LoadPaB0Mean(pa_ref_dir: Path, output_path: Path) -> File:
+    """Load PA b=0 NIfTI files from a directory and save their mean."""
     from pathlib import Path as _Path
 
     import nibabel as nib
     import numpy as np
 
-    topup_dir = _Path(topup_dir)
     pa_ref_dir = _Path(pa_ref_dir)
-    tmp = topup_dir / "prep"
-    tmp.mkdir(parents=True, exist_ok=True)
-
-    # AP b=0: extract then average
-    subprocess.run(
-        [
-            "dwiextract",
-            "-bzero",
-            str(dwi_mif),
-            str(tmp / "ap_b0.mif"),
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-    ap_b0_mean = str(tmp / "ap_b0_mean.nii.gz")
-    subprocess.run(
-        [
-            "mrmath",
-            str(tmp / "ap_b0.mif"),
-            "mean",
-            ap_b0_mean,
-            "-axis",
-            "3",
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-
-    # PA b=0: load from reference directory and average
+    output_path = _Path(output_path)
     pa_niis = sorted(pa_ref_dir.glob("*.nii")) + sorted(pa_ref_dir.glob("*.nii.gz"))
     if not pa_niis:
         raise FileNotFoundError(
@@ -342,33 +318,104 @@ def PrepareTopupData(
         pa_data = pa_imgs[0].get_fdata().mean(axis=-1)
     else:
         pa_data = np.mean([img.get_fdata() for img in pa_imgs], axis=0)
-    pa_b0_mean = str(tmp / "pa_b0_mean.nii.gz")
-    nib.save(nib.Nifti1Image(pa_data, pa_imgs[0].affine), pa_b0_mean)
-
-    # Concatenate AP + PA along volume axis
-    both_b0 = str(topup_dir / "both_b0.nii.gz")
-    subprocess.run(
-        [
-            "mrcat",
-            ap_b0_mean,
-            pa_b0_mean,
-            both_b0,
-            "-axis",
-            "3",
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-
-    # acqparams: AP = (0 -1 0 readout), PA = (0 1 0 readout)
-    acqparams = topup_dir / "acqparams.txt"
-    acqparams.write_text(f"0 -1 0 {readout_time}\n" f"0  1 0 {readout_time}\n")
-
-    return both_b0, acqparams, 1
+    nib.save(nib.Nifti1Image(pa_data, pa_imgs[0].affine), str(output_path))
+    return output_path
 
 
 @python.define
+def _WriteAcqparams(topup_dir: Path, readout_time: float) -> File:
+    """Write AP+PA acquisition parameters file for TOPUP."""
+    from pathlib import Path as _Path
+
+    acqparams = _Path(topup_dir) / "acqparams.txt"
+    acqparams.write_text(f"0 -1 0 {readout_time}\n0  1 0 {readout_time}\n")
+    return acqparams
+
+
+@workflow.define(outputs=["both_b0_file", "acqparams_file", "n_ap_b0"])
+def PrepareTopupData(
+    dwi_mif: File,
+    pa_ref_dir: Path,
+    topup_dir: Path,
+    readout_time: float = 0.033,
+) -> tuple[File, File, int]:
+    """
+    Prepare TOPUP input: concatenate mean AP b=0 and mean PA b=0.
+
+    1. **DwiExtract** + **MrMath** compute the mean AP b=0.
+    2. **_LoadPaB0Mean** loads and averages PA reference images.
+    3. **MrCat** concatenates AP and PA along the volume axis.
+    4. **_WriteAcqparams** writes the acquisition parameters file.
+
+    Returns the 4-D concatenated NIfTI, the acqparams.txt, and the number
+    of AP b=0 volumes (always 1 — we use the mean).
+    """
+    extract_ap = workflow.add(
+        DwiExtract(
+            in_file=dwi_mif,
+            bzero=True,
+            out_file=topup_dir / "ap_b0.mif",
+            force=True,
+            quiet=True,
+        ),
+        name="extract_ap_b0",
+    )
+
+    mean_ap = workflow.add(
+        MrMath(
+            in_file=extract_ap.out_file,
+            operation="mean",
+            out_file=topup_dir / "ap_b0_mean.nii.gz",
+            axis=3,
+            force=True,
+            quiet=True,
+        ),
+        name="mean_ap_b0",
+    )
+
+    pa_mean = workflow.add(
+        _LoadPaB0Mean(
+            pa_ref_dir=pa_ref_dir,
+            output_path=topup_dir / "pa_b0_mean.nii.gz",
+        ),
+        name="load_pa_b0",
+    )
+
+    concat = workflow.add(
+        MrCat(
+            inputs=[mean_ap.out_file, pa_mean.out],
+            out_file=topup_dir / "both_b0.nii.gz",
+            axis=3,
+            force=True,
+            quiet=True,
+        ),
+        name="concat_b0",
+    )
+
+    acqparams = workflow.add(
+        _WriteAcqparams(topup_dir=topup_dir, readout_time=readout_time),
+        name="write_acqparams",
+    )
+
+    @python.define
+    def _One() -> int:
+        return 1
+
+    n_ap_b0 = workflow.add(_One(), name="n_ap_b0")
+
+    return concat.out_file, acqparams.out, n_ap_b0.out
+
+
+@python.define
+def _WriteTopupIndex(dwi_nii: File) -> list[int]:
+    """Return an index list (all 1s) with one entry per DWI volume."""
+    import nibabel as nib
+
+    nvols = nib.load(str(dwi_nii)).shape[-1]
+    return [1] * nvols
+
+
+@workflow.define
 def ApplyTopupToDwi(
     dwi_mif: File,
     topup_fieldcoef: File,
@@ -379,65 +426,52 @@ def ApplyTopupToDwi(
     """
     Apply TOPUP correction to the full DWI series (AP volumes, index=1).
 
-    Converts DWI → NIfTI, runs ``applytopup`` with Jacobian modulation,
-    then re-embeds the gradient table and converts back to MIF.
+    1. **MrConvert** exports DWI to NIfTI with FSL gradient files.
+    2. **_WriteTopupIndex** generates a per-volume index list (all 1s).
+    3. **ApplyTOPUP** applies Jacobian modulation correction.
+    4. **MrConvert** re-embeds the gradient table and converts back to MIF.
     """
-    import subprocess
-    from pathlib import Path as _Path
-
-    import nibabel as nib
-
-    topup_dir = _Path(topup_dir)
-
-    # Export DWI to NIfTI + FSL grads
-    dwi_nii = str(topup_dir / "dwi_for_topup.nii.gz")
-    bvec_file = str(topup_dir / "dwi.bvec")
-    bval_file = str(topup_dir / "dwi.bval")
-    subprocess.run(
-        [
-            "mrconvert",
-            str(dwi_mif),
-            dwi_nii,
-            "-export_grad_fsl",
-            bvec_file,
-            bval_file,
-            "-force",
-            "-quiet",
-        ],
-        check=True,
+    export = workflow.add(
+        MrConvert(
+            in_file=dwi_mif,
+            out_file=topup_dir / "dwi_for_topup.nii.gz",
+            export_grad_fsl=True,
+            force=True,
+            quiet=True,
+        ),
+        name="export_dwi",
     )
 
-    nvols = nib.load(dwi_nii).shape[-1]
-    corrected_nii = str(topup_dir / "dwi_topup_corrected.nii.gz")
-    topup_base = str(_Path(topup_fieldcoef).parent / "topup_results")
-    subprocess.run(
-        [
-            "applytopup",
-            f"--imain={dwi_nii}",
-            f"--topup={topup_base}",
-            f"--datain={acqparams_file}",
-            f"--inindex={','.join(['1'] * nvols)}",
-            "--method=jac",
-            f"--out={corrected_nii}",
-        ],
-        check=True,
+    index = workflow.add(
+        _WriteTopupIndex(dwi_nii=export.out_file),
+        name="write_index",
     )
 
-    corrected_mif = str(topup_dir / "dwi_topup_corrected.mif")
-    subprocess.run(
-        [
-            "mrconvert",
-            corrected_nii,
-            corrected_mif,
-            "-fslgrad",
-            bvec_file,
-            bval_file,
-            "-force",
-            "-quiet",
-        ],
-        check=True,
+    apply = workflow.add(
+        ApplyTOPUP(
+            in_files=[export.out_file],
+            in_topup_fieldcoef=topup_fieldcoef,
+            in_topup_movpar=topup_movpar,
+            encoding_file=acqparams_file,
+            in_index=index.out,
+            method="jac",
+            out_corrected=topup_dir / "dwi_topup_corrected",
+        ),
+        name="apply_topup",
     )
-    return corrected_mif
+
+    convert = workflow.add(
+        MrConvert(
+            in_file=apply.out_corrected,
+            out_file=topup_dir / "dwi_topup_corrected.mif",
+            fslgrad=export.export_grad_fsl,
+            force=True,
+            quiet=True,
+        ),
+        name="convert_to_mif",
+    )
+
+    return convert.out_file
 
 
 # ============================================================================
@@ -506,47 +540,25 @@ def TopupCorrectionStep(
 # ============================================================================
 
 
-@python.define(outputs=["filtered_mif", "bvals_file", "bvecs_file"])
-def FilterBvalueShells(
-    dwi_mif: File,
+@python.define(outputs=["filtered_nii", "bvals_file", "bvecs_file"])
+def _FilterAndSaveVolumes(
+    dwi_nii: File,
+    fslgrad: tuple,
     output_dir: Path,
     min_bval: float = 500.0,
 ) -> tuple[File, File, File]:
-    """
-    Remove intermediate b-value shells (e.g. b=100, b=200).
-
-    Keeps b=0 volumes (b < 50) and all shells with b ≥ *min_bval*.
-    Returns the filtered DWI as a .mif file plus separate bval/bvec files.
-    """
-    import subprocess
+    """Filter DWI volumes keeping b=0 (b < 50) and shells ≥ min_bval."""
     from pathlib import Path as _Path
 
     import nibabel as nib
     import numpy as np
 
     output_dir = _Path(output_dir)
+    bvec_file, bval_file = fslgrad
 
-    # Export to NIfTI + FSL grads
-    tmp_nii = str(output_dir / "tmp_for_filter.nii.gz")
-    bvec_in = str(output_dir / "tmp.bvec")
-    bval_in = str(output_dir / "tmp.bval")
-    subprocess.run(
-        [
-            "mrconvert",
-            str(dwi_mif),
-            tmp_nii,
-            "-export_grad_fsl",
-            bvec_in,
-            bval_in,
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
-
-    bvals = np.loadtxt(bval_in)
-    bvecs = np.loadtxt(bvec_in)
-    img = nib.load(tmp_nii)
+    bvals = np.loadtxt(str(bval_file))
+    bvecs = np.loadtxt(str(bvec_file))
+    img = nib.load(str(dwi_nii))
     data = img.get_fdata()
 
     keep = (bvals < 50) | (bvals >= min_bval)
@@ -557,21 +569,57 @@ def FilterBvalueShells(
     np.savetxt(bval_out, bvals[keep][np.newaxis, :], fmt="%d")
     np.savetxt(bvec_out, bvecs[:, keep], fmt="%.6f")
 
-    filtered_mif = str(output_dir / "step03_5_filtered.mif")
-    subprocess.run(
-        [
-            "mrconvert",
-            filtered_nii,
-            filtered_mif,
-            "-fslgrad",
-            bvec_out,
-            bval_out,
-            "-force",
-            "-quiet",
-        ],
-        check=True,
+    return filtered_nii, bval_out, bvec_out
+
+
+@workflow.define(outputs=["filtered_mif", "bvals_file", "bvecs_file"])
+def FilterBvalueShells(
+    dwi_mif: File,
+    output_dir: Path,
+    min_bval: float = 500.0,
+) -> tuple[File, File, File]:
+    """
+    Remove intermediate b-value shells (e.g. b=100, b=200).
+
+    1. **MrConvert** exports to NIfTI with FSL gradient files.
+    2. **_FilterAndSaveVolumes** keeps b=0 and b ≥ *min_bval* with nibabel/numpy.
+    3. **MrConvert** re-embeds the filtered gradient table into MIF.
+
+    Returns the filtered DWI as a .mif file plus separate bval/bvec files.
+    """
+    export = workflow.add(
+        MrConvert(
+            in_file=dwi_mif,
+            out_file=output_dir / "tmp_for_filter.nii.gz",
+            export_grad_fsl=True,
+            force=True,
+            quiet=True,
+        ),
+        name="export_nii",
     )
-    return filtered_mif, bval_out, bvec_out
+
+    filt = workflow.add(
+        _FilterAndSaveVolumes(
+            dwi_nii=export.out_file,
+            fslgrad=export.export_grad_fsl,
+            output_dir=output_dir,
+            min_bval=min_bval,
+        ),
+        name="filter_volumes",
+    )
+
+    convert = workflow.add(
+        MrConvert(
+            in_file=filt.filtered_nii,
+            out_file=output_dir / "step03_5_filtered.mif",
+            fslgrad=(filt.bvecs_file, filt.bvals_file),
+            force=True,
+            quiet=True,
+        ),
+        name="convert_filtered",
+    )
+
+    return convert.out_file, filt.bvals_file, filt.bvecs_file
 
 
 # ============================================================================
@@ -579,43 +627,21 @@ def FilterBvalueShells(
 # ============================================================================
 
 
-@python.define(
-    outputs=["dwi_nii", "bvals_file", "bvecs_file", "index_file", "acqparams_file"]
-)
-def PrepareEddyInputs(
-    dwi_mif: File,
+@python.define(outputs=["index_file", "acqparams_file"])
+def _WriteEddyFiles(
+    dwi_nii: File,
+    fslgrad: tuple,
     topup_acqparams: File,
     eddy_dir: Path,
-) -> tuple[File, File, File, File, File]:
-    """
-    Export DWI to NIfTI + FSL grads and generate the EDDY index file.
-
-    Reuses the AP row from the TOPUP acqparams (index=1 for all volumes).
-    """
-    import subprocess
+) -> tuple[File, File]:
+    """Write EDDY index.txt and AP-only acqparams.txt from the TOPUP params."""
     from pathlib import Path as _Path
 
     import nibabel as nib
 
     eddy_dir = _Path(eddy_dir)
-    dwi_nii = str(eddy_dir / "dwi_for_eddy.nii.gz")
-    bvec_file = str(eddy_dir / "bvecs")
-    bval_file = str(eddy_dir / "bvals")
-    subprocess.run(
-        [
-            "mrconvert",
-            str(dwi_mif),
-            dwi_nii,
-            "-export_grad_fsl",
-            bvec_file,
-            bval_file,
-            "-force",
-            "-quiet",
-        ],
-        check=True,
-    )
+    nvols = nib.load(str(dwi_nii)).shape[-1]
 
-    nvols = nib.load(dwi_nii).shape[-1]
     index_file = str(eddy_dir / "index.txt")
     with open(index_file, "w") as f:
         f.write(" ".join(["1"] * nvols) + "\n")
@@ -626,10 +652,68 @@ def PrepareEddyInputs(
         ap_row = src.readline()
     acqparams_file.write_text(ap_row)
 
-    return dwi_nii, bval_file, bvec_file, index_file, str(acqparams_file)
+    return index_file, str(acqparams_file)
 
 
-@python.define
+@python.define(outputs=["bvecs_file", "bvals_file"])
+def _UnpackGradFsl(grad_fsl: tuple) -> tuple[File, File]:
+    """Unpack an (bvec, bval) tuple into named bvecs/bvals outputs."""
+    return grad_fsl[0], grad_fsl[1]
+
+
+@workflow.define(
+    outputs=["dwi_nii", "bvals_file", "bvecs_file", "index_file", "acqparams_file"]
+)
+def PrepareEddyInputs(
+    dwi_mif: File,
+    topup_acqparams: File,
+    eddy_dir: Path,
+) -> tuple[File, File, File, File, File]:
+    """
+    Export DWI to NIfTI + FSL grads and generate the EDDY index file.
+
+    1. **MrConvert** exports DWI to NIfTI with FSL gradient files.
+    2. **_WriteEddyFiles** writes the volume index and AP-only acqparams.
+    3. **_UnpackGradFsl** separates bvec/bval into named outputs.
+
+    Reuses the AP row from the TOPUP acqparams (index=1 for all volumes).
+    """
+    export = workflow.add(
+        MrConvert(
+            in_file=dwi_mif,
+            out_file=eddy_dir / "dwi_for_eddy.nii.gz",
+            export_grad_fsl=True,
+            force=True,
+            quiet=True,
+        ),
+        name="export_nii",
+    )
+
+    eddy_files = workflow.add(
+        _WriteEddyFiles(
+            dwi_nii=export.out_file,
+            fslgrad=export.export_grad_fsl,
+            topup_acqparams=topup_acqparams,
+            eddy_dir=eddy_dir,
+        ),
+        name="write_eddy_files",
+    )
+
+    unpack = workflow.add(
+        _UnpackGradFsl(grad_fsl=export.export_grad_fsl),
+        name="unpack_grads",
+    )
+
+    return (
+        export.out_file,
+        unpack.bvals_file,
+        unpack.bvecs_file,
+        eddy_files.index_file,
+        eddy_files.acqparams_file,
+    )
+
+
+@workflow.define
 def ConvertEddyOutputToMif(
     eddy_nii: File,
     rotated_bvecs: File,
@@ -637,22 +721,17 @@ def ConvertEddyOutputToMif(
     output_mif: Path,
 ) -> File:
     """Convert the EDDY-corrected NIfTI + rotated bvecs back to MIF."""
-    import subprocess
-
-    subprocess.run(
-        [
-            "mrconvert",
-            str(eddy_nii),
-            str(output_mif),
-            "-fslgrad",
-            str(rotated_bvecs),
-            str(bvals_file),
-            "-force",
-            "-quiet",
-        ],
-        check=True,
+    convert = workflow.add(
+        MrConvert(
+            in_file=eddy_nii,
+            out_file=output_mif,
+            fslgrad=(rotated_bvecs, bvals_file),
+            force=True,
+            quiet=True,
+        ),
+        name="convert",
     )
-    return output_mif
+    return convert.out_file
 
 
 # ============================================================================
@@ -750,81 +829,44 @@ def EddyCorrectionStep(
 # ============================================================================
 
 
+@python.define
+def _ComputeShellAdc(
+    shell_mean_nii: File,
+    b0_mean_nii: File,
+    b_value: float,
+    output_path: Path,
+) -> File:
+    """Compute ADC = ln(S0 / S_b) / b for a single shell and save to NIfTI."""
+    import nibabel as nib
+    import numpy as np
+
+    ref_img = nib.load(str(b0_mean_nii))
+    s0 = np.maximum(ref_img.get_fdata(), 1e-6)
+    s_b = np.maximum(nib.load(str(shell_mean_nii)).get_fdata(), 1e-6)
+    ratio = s0 / s_b
+    adc = np.where(ratio > 0, np.log(ratio) / b_value, 0.0)
+    nib.save(nib.Nifti1Image(adc, ref_img.affine, ref_img.header), str(output_path))
+    return output_path
+
+
 @python.define(outputs=["adc_map", "stats_row"])
-def ComputeAdcMaps(
-    dwi_mif: File,
+def _AggregateAdcMaps(
+    shell_adc_files: list[File],
     phantom_mask: File,
     output_dir: Path,
     label: str,
-    shells: list[float] = ADC_SHELLS,
 ) -> tuple[File, dict]:
-    """
-    Compute multi-shell mean ADC maps from a DWI series.
-
-    For each shell b in *shells* (if present in the data):
-      1. Extract the DWI volumes at that b-value and average.
-      2. Extract b=0 volumes and compute mean S0.
-      3. Compute ADC = ln(S0 / S_b) / b per voxel.
-
-    The per-shell ADC maps are averaged to produce a single mean ADC map.
-    Masked statistics (mean, std, min, max) are returned as a dict for the
-    summary CSV.
-    """
-    import subprocess
+    """Average per-shell ADC maps and compute masked statistics."""
     from pathlib import Path as _Path
 
     import nibabel as nib
     import numpy as np
 
     output_dir = _Path(output_dir)
-    tmp = output_dir / f"tmp_{label}"
-    tmp.mkdir(parents=True, exist_ok=True)
-
-    # Mean b=0
-    b0_mif = str(tmp / "b0.mif")
-    b0_nii = str(tmp / "b0_mean.nii.gz")
-    subprocess.run(
-        ["dwiextract", "-bzero", str(dwi_mif), b0_mif, "-force", "-quiet"],
-        check=True,
-    )
-    subprocess.run(
-        ["mrmath", b0_mif, "mean", b0_nii, "-axis", "3", "-force", "-quiet"],
-        check=True,
-    )
-    s0 = np.maximum(nib.load(b0_nii).get_fdata(), 1e-6)
-    ref_img = nib.load(b0_nii)
-
-    adc_maps = []
-    for b in shells:
-        shell_mif = str(tmp / f"shell_{int(b)}.mif")
-        shell_nii = str(tmp / f"shell_{int(b)}_mean.nii.gz")
-        result = subprocess.run(
-            [
-                "dwiextract",
-                str(dwi_mif),
-                shell_mif,
-                "-shells",
-                str(b),
-                "-force",
-                "-quiet",
-            ],
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            continue  # shell not present in this dataset
-        subprocess.run(
-            ["mrmath", shell_mif, "mean", shell_nii, "-axis", "3", "-force", "-quiet"],
-            check=True,
-        )
-        s_b = np.maximum(nib.load(shell_nii).get_fdata(), 1e-6)
-        ratio = s0 / s_b
-        adc = np.where(ratio > 0, np.log(ratio) / b, 0.0)
-        adc_maps.append(adc)
-
-    if not adc_maps:
-        raise RuntimeError(f"No ADC shells found in {dwi_mif} (looked for {shells})")
-
+    ref_img = nib.load(str(shell_adc_files[0]))
+    adc_maps = [nib.load(str(f)).get_fdata() for f in shell_adc_files]
     mean_adc = np.mean(adc_maps, axis=0)
+
     adc_nii = str(output_dir / f"ADC_{label}.nii.gz")
     nib.save(nib.Nifti1Image(mean_adc, ref_img.affine, ref_img.header), adc_nii)
 
@@ -838,6 +880,101 @@ def ComputeAdcMaps(
         "max_adc": float(masked.max()),
     }
     return adc_nii, stats_row
+
+
+@workflow.define(outputs=["adc_map", "stats_row"])
+def ComputeAdcMaps(
+    dwi_mif: File,
+    phantom_mask: File,
+    output_dir: Path,
+    label: str,
+    shells: list[float] = ADC_SHELLS,
+) -> tuple[File, dict]:
+    """
+    Compute multi-shell mean ADC maps from a DWI series.
+
+    For each shell b in *shells*:
+    1. **DwiExtract** + **MrMath** compute the mean signal at that b-value.
+    2. **_ComputeShellAdc** computes ADC = ln(S0 / S_b) / b per voxel.
+
+    A combined **_AggregateAdcMaps** averages all shell ADC maps and
+    returns masked statistics as a dict for the summary CSV.
+    """
+    # Extract and average b=0
+    extract_b0 = workflow.add(
+        DwiExtract(
+            in_file=dwi_mif,
+            bzero=True,
+            out_file=output_dir / f"tmp_{label}_b0.mif",
+            force=True,
+            quiet=True,
+        ),
+        name="extract_b0",
+    )
+
+    mean_b0 = workflow.add(
+        MrMath(
+            in_file=extract_b0.out_file,
+            operation="mean",
+            out_file=output_dir / f"tmp_{label}_b0_mean.nii.gz",
+            axis=3,
+            force=True,
+            quiet=True,
+        ),
+        name="mean_b0",
+    )
+
+    # Per-shell ADC computation (static loop — runs at graph construction time)
+    shell_adc_files = []
+    for b in shells:
+        tag = f"{label}_shell_{int(b)}"
+
+        extract_shell = workflow.add(
+            DwiExtract(
+                in_file=dwi_mif,
+                shells=[float(b)],
+                out_file=output_dir / f"tmp_{tag}.mif",
+                force=True,
+                quiet=True,
+            ),
+            name=f"extract_{tag}",
+        )
+
+        mean_shell = workflow.add(
+            MrMath(
+                in_file=extract_shell.out_file,
+                operation="mean",
+                out_file=output_dir / f"tmp_{tag}_mean.nii.gz",
+                axis=3,
+                force=True,
+                quiet=True,
+            ),
+            name=f"mean_{tag}",
+        )
+
+        adc_shell = workflow.add(
+            _ComputeShellAdc(
+                shell_mean_nii=mean_shell.out_file,
+                b0_mean_nii=mean_b0.out_file,
+                b_value=float(b),
+                output_path=output_dir / f"tmp_{tag}_adc.nii.gz",
+            ),
+            name=f"adc_{tag}",
+        )
+
+        shell_adc_files.append(adc_shell.out)
+
+    agg = workflow.add(
+        _AggregateAdcMaps(
+            shell_adc_files=shell_adc_files,
+            phantom_mask=phantom_mask,
+            output_dir=output_dir,
+            label=label,
+        ),
+        name="aggregate_adc",
+    )
+
+    return agg.adc_map, agg.stats_row
 
 
 @python.define(outputs=["diff_map"])
