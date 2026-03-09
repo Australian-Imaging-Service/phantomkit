@@ -3,7 +3,7 @@ requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
-name = "phantom-qa-metrics"
+name = "phantomkit"
 description = "Collection of tools to derive metrics from physical phantoms used in QA of medical imaging instruments."
 readme = "README.md"
 version = "0.1.0"
@@ -76,31 +76,31 @@ docs = [
 ]
 
 [project.scripts]
-phantom-process = "phantom_qa_metrics.cli:main"
-plot-vial-intensity = "phantom_qa_metrics.plotting.vial_intensity:main"
-plot-maps-ir = "phantom_qa_metrics.plotting.maps_ir:main"
-plot-maps-te = "phantom_qa_metrics.plotting.maps_te:main"
+phantom-process = "phantomkit.cli:main"
+plot-vial-intensity = "phantomkit.plotting.vial_intensity:main"
+plot-maps-ir = "phantomkit.plotting.maps_ir:main"
+plot-maps-te = "phantomkit.plotting.maps_te:main"
 
 [project.urls]
-repository = "https://github.com/Australian-Imaging-Service/phantom-qa-metrics"
+repository = "https://github.com/Australian-Imaging-Service/phantomkit"
 
 
 [tool.hatch.version]
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "phantom_qa_metrics/_version.py"
+version-file = "phantomkit/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["phantom_qa_metrics"]
+packages = ["phantomkit"]
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
 [tool.hatch.build]
-packages = ["phantom_qa_metrics"]
+packages = ["phantomkit"]
 exclude = ["tests"]
-include = ["./phantom_qa_metrics"]
+include = ["./phantomkit"]
 
 [tool.mypy]
 python_version = "3.11"

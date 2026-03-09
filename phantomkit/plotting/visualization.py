@@ -196,11 +196,11 @@ def GeneratePlots(
     Screenshots use mrview via MrView.
     """
     import re as _re
-    from phantom_qa_metrics.plotting.vial_intensity import plot_vial_intensity
-    from phantom_qa_metrics.plotting.maps_ir import (
+    from phantomkit.plotting.vial_intensity import plot_vial_intensity
+    from phantomkit.plotting.maps_ir import (
         plot_vial_means_std_pub_from_nifti as plot_ir,
     )
-    from phantom_qa_metrics.plotting.maps_te import (
+    from phantomkit.plotting.maps_te import (
         plot_vial_means_std_pub_from_nifti as plot_te,
     )
 

@@ -19,24 +19,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 
-def _syn_warped_callable(output_dir, inputs, stdout, stderr):
-    import os
-
-    return os.path.abspath(inputs.output_prefix) + "Warped.nii.gz"
-
-
-def _syn_inv_warped_callable(output_dir, inputs, stdout, stderr):
-    import os
-
-    return os.path.abspath(inputs.output_prefix) + "InverseWarped.nii.gz"
-
-
-def _syn_matrix_callable(output_dir, inputs, stdout, stderr):
-    import os
-
-    return os.path.abspath(inputs.output_prefix) + "0GenericAffine.mat"
-
-
 @shell.define
 class RegistrationSynN(shell.Task["RegistrationSynN.Outputs"]):
     """
@@ -82,15 +64,15 @@ class RegistrationSynN(shell.Task["RegistrationSynN.Outputs"]):
 
     class Outputs(shell.Outputs):
         warped_image: str = shell.outarg(
-            callable=_syn_warped_callable,
+            path_template="{output_prefix}Warped.nii.gz",
             help="Warped moving image in fixed space.",
         )
         inverse_warped_image: str = shell.outarg(
-            callable=_syn_inv_warped_callable,
+            path_template="{output_prefix}InverseWarped.nii.gz",
             help="Inverse-warped fixed image in moving space.",
         )
         out_matrix: str = shell.outarg(
-            callable=_syn_matrix_callable,
+            path_template="{output_prefix}0GenericAffine.mat",
             help="Generic affine transform matrix (.mat).",
         )
 

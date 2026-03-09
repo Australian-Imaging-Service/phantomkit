@@ -14,7 +14,7 @@ from pydra.compose import python, workflow
 from pydra.tasks.ants.v2.resampling.apply_transforms import ApplyTransforms
 from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrInfo, MrStats, MrTransform
 
-from phantom_qa_metrics.registration import ParseMrStatsStdout
+from phantomkit.registration import ParseMrStatsStdout
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from phantom_qa_metrics.workflow import PhantomSessionWorkflow, BatchWorkflow
+from phantomkit.workflow import PhantomSessionWorkflow, BatchWorkflow
 
 logger = logging.getLogger(__name__)
 

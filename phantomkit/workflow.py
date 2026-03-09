@@ -10,16 +10,16 @@ from pathlib import Path
 
 from pydra.compose import python, workflow
 
-from phantom_qa_metrics.registration import (
+from phantomkit.registration import (
     IterativeRegistration,
     SaveTemplateInScannerSpace,
 )
-from phantom_qa_metrics.metrics import (
+from phantomkit.metrics import (
     TransformVialsToSubjectSpace,
     ExtractMetricsFromContrasts,
     TransformContrastsToTemplateSpace,
 )
-from phantom_qa_metrics.plotting.visualization import GeneratePlots, Cleanup
+from phantomkit.plotting.visualization import GeneratePlots, Cleanup
 
 logger = logging.getLogger(__name__)
 
