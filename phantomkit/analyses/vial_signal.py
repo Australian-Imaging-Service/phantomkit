@@ -105,7 +105,7 @@ def GetContrastFiles(input_image: NiftiGz) -> list[NiftiGz]:
         "scanner_space_image",
     ]
 )
-def GspSpiritAnalysis(
+def VialSignalAnalysis(
     input_image: NiftiGz,
     template_dir: Directory,
     rotation_library_file: File,
@@ -268,7 +268,7 @@ def GspSpiritAnalysis(
 
 
 @workflow.define(outputs=["results"])
-def GspSpiritAnalysisBatch(
+def VialSignalAnalysisBatch(
     input_images: list[NiftiGz],
     template_dir: Directory,
     output_base_dir: Path,
@@ -281,7 +281,7 @@ def GspSpiritAnalysisBatch(
     split across input_images and results collected back into a list.
     """
     process = workflow.add(
-        GspSpiritAnalysis(
+        VialSignalAnalysis(
             input_image=input_images,
             template_dir=template_dir,
             output_base_dir=output_base_dir,

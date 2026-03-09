@@ -9,7 +9,7 @@ from typing import get_args, get_origin
 import attrs
 import click
 
-import phantomkit.protocols
+import phantomkit.analyses
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +25,18 @@ _INPUT_FIELD_NAMES = frozenset({"input_image", "input_images"})
 
 def _discover_protocols() -> dict[str, tuple]:
     """
-    Scan ``phantomkit.protocols`` for (single, batch) workflow pairs.
+    Scan ``phantomkit.analyses`` for (single, batch) workflow pairs.
 
-    Returns a dict mapping a hyphenated slug (e.g. ``"gsp-spirit"``) to a
+    Returns a dict mapping a hyphenated slug (e.g. ``"vial-signal"``) to a
     ``(single_cls, batch_cls_or_None)`` tuple.  Only non-private modules that
     contain at least one pydra workflow class (detected by ``Outputs``
     attribute) are included.
     """
     found: dict[str, tuple] = {}
-    for info in pkgutil.iter_modules(phantomkit.protocols.__path__):
+    for info in pkgutil.iter_modules(phantomkit.analyses.__path__):
         if info.name.startswith("_"):
             continue
-        mod = importlib.import_module(f"phantomkit.protocols.{info.name}")
+        mod = importlib.import_module(f"phantomkit.analyses.{info.name}")
         for attr_name, obj in vars(mod).items():
             if attr_name.startswith("_") or not attr_name.endswith("Analysis"):
                 continue

@@ -32,10 +32,10 @@ def test_main_help(runner) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_list_shows_gsp_spirit(runner) -> None:
+def test_list_shows_vial_signal(runner) -> None:
     result = runner.invoke(main, ["list"])
     assert result.exit_code == 0
-    assert "gsp-spirit" in result.output
+    assert "vial-signal" in result.output
 
 
 def test_list_shows_batch_supported(runner) -> None:
@@ -51,11 +51,11 @@ def test_list_shows_batch_supported(runner) -> None:
 def test_run_help(runner) -> None:
     result = runner.invoke(main, ["run", "--help"])
     assert result.exit_code == 0
-    assert "gsp-spirit" in result.output
+    assert "vial-signal" in result.output
 
 
-def test_run_gsp_spirit_help(runner) -> None:
-    result = runner.invoke(main, ["run", "gsp-spirit", "--help"])
+def test_run_vial_signal_help(runner) -> None:
+    result = runner.invoke(main, ["run", "vial-signal", "--help"])
     assert result.exit_code == 0
     assert "--template-dir" in result.output
     assert "--rotation-library-file" in result.output
@@ -64,8 +64,8 @@ def test_run_gsp_spirit_help(runner) -> None:
     assert "--pattern" in result.output
 
 
-def test_run_gsp_spirit_missing_required_options(runner) -> None:
-    result = runner.invoke(main, ["run", "gsp-spirit", "/fake/image.nii.gz"])
+def test_run_vial_signal_missing_required_options(runner) -> None:
+    result = runner.invoke(main, ["run", "vial-signal", "/fake/image.nii.gz"])
     assert result.exit_code != 0
 
 
@@ -74,7 +74,7 @@ def test_run_gsp_spirit_missing_required_options(runner) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_gsp_spirit_single(runner, tmp_path) -> None:
+def test_run_vial_signal_single(runner, tmp_path) -> None:
     image = NiftiGz.sample(dest_dir=tmp_path, stem="t1")
     template_dir = tmp_path / "template"
     template_dir.mkdir()
@@ -92,7 +92,7 @@ def test_run_gsp_spirit_single(runner, tmp_path) -> None:
             main,
             [
                 "run",
-                "gsp-spirit",
+                "vial-signal",
                 str(image),
                 "--template-dir",
                 str(template_dir),
@@ -115,7 +115,7 @@ def test_run_gsp_spirit_single(runner, tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_gsp_spirit_batch_from_dir(runner, tmp_path) -> None:
+def test_run_vial_signal_batch_from_dir(runner, tmp_path) -> None:
     # Create two session dirs with NIfTI files
     for i in range(2):
         NiftiGz.sample(dest_dir=tmp_path / f"session{i}", stem="t1")
@@ -134,7 +134,7 @@ def test_run_gsp_spirit_batch_from_dir(runner, tmp_path) -> None:
             main,
             [
                 "run",
-                "gsp-spirit",
+                "vial-signal",
                 str(tmp_path),
                 "--template-dir",
                 str(template_dir),
@@ -164,7 +164,7 @@ def test_run_batch_no_matching_files(runner, tmp_path) -> None:
         main,
         [
             "run",
-            "gsp-spirit",
+            "vial-signal",
             str(tmp_path),
             "--template-dir",
             str(template_dir),
