@@ -10,6 +10,8 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "click >=8.0",
+    "fileformats",
+    "fileformats-medimage",
     "fileformats-medimage-extras",
     "matplotlib >=3.7.0",
     "numpy >=1.24.0",
@@ -74,10 +76,10 @@ docs = [
 ]
 
 [project.scripts]
-phantom-process = "phantom_qa_metrics.pydra_phantom_iterative:main"
-plot-vial-intensity = "phantom_qa_metrics.plot_vial_intensity:main"
-plot-maps-ir = "phantom_qa_metrics.plot_maps_ir:main"
-plot-maps-te = "phantom_qa_metrics.plot_maps_TE:main"
+phantom-process = "phantom_qa_metrics.cli:main"
+plot-vial-intensity = "phantom_qa_metrics.plotting.vial_intensity:main"
+plot-maps-ir = "phantom_qa_metrics.plotting.maps_ir:main"
+plot-maps-te = "phantom_qa_metrics.plotting.maps_te:main"
 
 [project.urls]
 repository = "https://github.com/Australian-Imaging-Service/phantom-qa-metrics"
