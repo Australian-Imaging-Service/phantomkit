@@ -7,7 +7,7 @@ name = "phantomkit"
 description = "Collection of tools to derive metrics from physical phantoms used in QA of medical imaging instruments."
 readme = "README.md"
 license = { file = "LICENSE" }
-version = "0.1.0"
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = [
     "click >=8.0",
