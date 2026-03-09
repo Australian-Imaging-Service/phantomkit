@@ -51,7 +51,7 @@ jobs:
       with:
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
-        slug: Australian-Imaging-Service/phi-finder
+        slug: Australian-Imaging-Service/phantomkit
 
   build:
     needs: [test]
