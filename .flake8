@@ -7,7 +7,7 @@ exclude =
     docs/sphinxext/
     docs/tools/
     docs/conf.py
-    phantom_qa_metrics/_version.py
+    phantomkit/_version.py
     docs/source/conf.py
 max-line-length = 88
 select = C,E,F,W,B,B950

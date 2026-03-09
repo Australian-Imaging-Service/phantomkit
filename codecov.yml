@@ -2,7 +2,7 @@ coverage:
   range: "50...100"
   ignore:          # files and folders that will be removed during processing
     - "**/tests"
-    - "phantom_qa_metrics/_version.py"
+    - "phantomkit/_version.py"
   status:
     project:
       default:
