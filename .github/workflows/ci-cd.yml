@@ -141,11 +141,11 @@ jobs:
       with:
         name: built-docs
         path: docs-build
-    - name: Check for GHPAGES_DEPLOY_KEY token
+    - name: Check for GH_TOKEN token
       id: deployable
       if: github.event_name == 'release'
       env:
-        GHPAGES_DEPLOY_KEY: "${{ secrets.GH_TOKEN }}"
+        GH_TOKEN: "${{ secrets.GH_TOKEN }}"
       run: if [ -n "$GH_TOKEN" ]; then echo "DEPLOY=true" >> $GITHUB_OUTPUT; fi
     - name: Deploy Docs to GitHub Pages
       if: steps.deployable.outputs.DEPLOY
