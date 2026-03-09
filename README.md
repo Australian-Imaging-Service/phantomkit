@@ -1,4 +1,4 @@
-<img src="docs/source/_static/logo.svg" alt="PhantomKit" width="600"/>
+<img src="https://raw.githubusercontent.com/australian-imaging-service/phantomkit/main/docs/source/_static/logo.svg" alt="PhantomKit" width="600"/>
 
 [![CI/CD](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml)
 [![Codecov](https://codecov.io/gh/australian-imaging-service/phantomkit/branch/main/graph/badge.svg?token=UIS0OGPST7)](https://codecov.io/gh/australian-imaging-service/phantomkit)
