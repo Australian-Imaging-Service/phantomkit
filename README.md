@@ -32,7 +32,6 @@ from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
 wf = GspSpiritAnalysis(
     input_image="/data/session01/t1_mprage.nii.gz",
     template_dir="/templates/gsp_spirit",
-    output_base_dir="/results",
     rotation_library_file="/templates/gsp_spirit/rotations.txt",
 )
 outputs = wf(cache_root="/data/cache-root")
