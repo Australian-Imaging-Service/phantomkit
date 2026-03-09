@@ -3,7 +3,6 @@
 [![CI/CD](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml)
 [![Codecov](https://codecov.io/gh/australian-imaging-service/phantomkit/branch/main/graph/badge.svg?token=UIS0OGPST7)](https://codecov.io/gh/australian-imaging-service/phantomkit)
 [![PyPI version](https://img.shields.io/pypi/v/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
-[![Python versions](https://img.shields.io/pypi/pyversions/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
 [![Documentation Status](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://australian-imaging-service.github.io/phantomkit/)
 
 # PhantomKit
