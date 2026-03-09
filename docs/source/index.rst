@@ -58,3 +58,4 @@ Copyright 2026 Australian Imaging Service.
     :hidden:
 
     quick_start
+    api

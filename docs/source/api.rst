@@ -1,4 +1,7 @@
 API
 ===
 
-.. autofunction:: phantomkit.protocols.gsp_spirit.GspSpiritAnalysis
+Protocols
+---------
+
+.. autoclass:: phantomkit.protocols.gsp_spirit.GspSpiritAnalysis

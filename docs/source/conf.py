@@ -386,3 +386,37 @@ epub_exclude_files = ["search.html"]
 intersphinx_mapping = {"python": ("https://docs.python.org/", None)}
 
 numpydoc_show_class_members = False
+
+# Custom numpydoc section for pydra workflow step lists.
+# "Steps" renders as a Notes-style section (freeform content).
+numpydoc_custom_sections = ["Steps"]
+
+
+# ---------------------------------------------------------------------------
+# Recover docstrings from pydra task/workflow classes.
+#
+# @workflow.define and @python.define create classes via types.new_class(),
+# which does not copy __doc__ from the decorated function.  The original
+# function is preserved as the default of the attrs "constructor" field, so
+# we pull the docstring from there when autoclass finds an empty __doc__.
+# ---------------------------------------------------------------------------
+
+
+def _recover_pydra_docstring(app, what, name, obj, options, lines):
+    if what != "class" or lines:
+        return
+    try:
+        import attrs
+
+        constructor_field = getattr(attrs.fields(obj), "constructor", None)
+        if constructor_field is None:
+            return
+        func = constructor_field.default
+        if callable(func) and func.__doc__:
+            lines.extend(func.__doc__.splitlines())
+    except Exception:
+        pass
+
+
+def setup(app):
+    app.connect("autodoc-process-docstring", _recover_pydra_docstring)

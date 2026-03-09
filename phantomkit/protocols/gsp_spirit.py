@@ -8,6 +8,8 @@ BatchWorkflow runs multiple sessions in parallel.
 import logging
 from pathlib import Path
 
+from fileformats.generic import Directory, File
+from fileformats.medimage import Nifti
 from pydra.compose import python, workflow
 
 from phantomkit.registration import (
@@ -98,16 +100,49 @@ def GetContrastFiles(input_image: str) -> list[str]:
     ]
 )
 def GspSpiritAnalysis(
-    input_image: str,
-    template_dir: str,
-    output_base_dir: str,
-    rotation_library_file: str,
-) -> tuple[str, str, str, str]:
+    input_image: Nifti,
+    template_dir: Directory,
+    rotation_library_file: File,
+    output_base_dir: Directory | None = None,
+) -> tuple[Directory, str, str, str]:
     """
-    Pydra workflow for processing a single phantom MRI session.
+    Pydra workflow for processing a single GSP SPIRIT phantom MRI session.
 
-    Workflow steps
-    --------------
+    Registers the phantom scan to the GSP SPIRIT template using iterative ANTs
+    SyN registration with an orientation search, extracts per-vial signal
+    statistics for all contrast images, and generates publication-quality plots.
+
+    Parameters
+    ----------
+    input_image : str
+        Path to the primary NIfTI image for the session (e.g. the T1 MPRAGE).
+        All NIfTI files in the same directory are treated as contrast images.
+    template_dir : str
+        Path to the GSP SPIRIT template directory.  Must contain
+        ``ImageTemplate.nii.gz`` and a ``VialsLabelled/`` sub-directory of
+        per-vial mask files.
+    output_base_dir : str
+        Root output directory.  A sub-directory named after the session
+        (parent folder of *input_image*) is created automatically.
+    rotation_library_file : str
+        Path to a text file listing quoted ANTs rotation strings, one per line,
+        used during the iterative orientation search.
+
+    Returns
+    -------
+    metrics_dir : str
+        Directory containing per-contrast CSV files of vial signal statistics
+        (mean, median, std, min, max).
+    vial_dir : str
+        Directory containing the vial mask NIfTI files warped into subject
+        (scanner) space.
+    images_template_space_dir : str
+        Directory containing all contrast images warped into template space.
+    scanner_space_image : str
+        Path to the template phantom image warped back into scanner space.
+
+    Steps
+    -----
     1. **PrepareSessionPaths**  — derive output paths and create directories
     2. **GetVialMasks**         — list template vial mask files
     3. **GetContrastFiles**     — list all contrast NIfTI files in the session
