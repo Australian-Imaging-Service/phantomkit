@@ -79,10 +79,7 @@ docs = [
 ]
 
 [project.scripts]
-phantom-process = "phantomkit.cli:main"
-plot-vial-intensity = "phantomkit.plotting.vial_intensity:main"
-plot-maps-ir = "phantomkit.plotting.maps_ir:main"
-plot-maps-te = "phantomkit.plotting.maps_te:main"
+phantomkit = "phantomkit.cli:main"
 
 [project.urls]
 repository = "https://github.com/Australian-Imaging-Service/phantomkit"

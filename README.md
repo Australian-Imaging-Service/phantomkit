@@ -1,11 +1,11 @@
-# PhantomKit
-
-<img src="docs/source/_static/logo.svg" alt="PhantomKit" width="480"/>
+<img src="docs/source/_static/logo.svg" alt="PhantomKit" width="600"/>
 
 [![CI/CD](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml)
 [![Codecov](https://codecov.io/gh/australian-imaging-service/phantomkit/branch/main/graph/badge.svg?token=UIS0OGPST7)](https://codecov.io/gh/australian-imaging-service/phantomkit)
 [![PyPI version](https://img.shields.io/pypi/v/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
 [![Python versions](https://img.shields.io/pypi/pyversions/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
+
+# PhantomKit
 
 **PhantomKit** is a Python toolkit for automated quality assurance (QA) of medical imaging scanners using physical phantoms. It provides pydra-based workflows that register phantom scans to a reference template, extract per-vial signal statistics across multiple contrast types, and generate publication-quality plots — supporting both MRI and PET phantom protocols.
 
@@ -27,7 +27,6 @@ python -m pip install phantomkit
 
 ```python
 from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
-import pydra
 
 wf = GspSpiritAnalysis(
     input_image="/data/session01/t1_mprage.nii.gz",
@@ -35,14 +34,13 @@ wf = GspSpiritAnalysis(
     output_base_dir="/results",
     rotation_library_file="/templates/gsp_spirit/rotations.txt",
 )
-with pydra.Submitter(plugin="cf") as sub:
-    sub(wf)
+outputs = wf(cache_root="/data/cache-root")
 ```
 
 Or via the command line:
 
 ```bash
-phantom-process /data/session01/t1_mprage.nii.gz \
+phantomkit run gsp-spirit /data/session01/t1_mprage.nii.gz \
     --template-dir /templates/gsp_spirit \
     --output-dir /results \
     --rotation-lib /templates/gsp_spirit/rotations.txt
