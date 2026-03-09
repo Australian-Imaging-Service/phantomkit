@@ -27,7 +27,6 @@ python -m pip install phantomkit
 
 ```python
 from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
-import pydra
 
 wf = GspSpiritAnalysis(
     input_image="/data/session01/t1_mprage.nii.gz",
@@ -35,14 +34,13 @@ wf = GspSpiritAnalysis(
     output_base_dir="/results",
     rotation_library_file="/templates/gsp_spirit/rotations.txt",
 )
-with pydra.Submitter(plugin="cf") as sub:
-    sub(wf)
+outputs = wf(cache_root="/data/cache-root")
 ```
 
 Or via the command line:
 
 ```bash
-phantom-process /data/session01/t1_mprage.nii.gz \
+phantomkit run gsp-spirit /data/session01/t1_mprage.nii.gz \
     --template-dir /templates/gsp_spirit \
     --output-dir /results \
     --rotation-lib /templates/gsp_spirit/rotations.txt
