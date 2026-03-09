@@ -387,9 +387,58 @@ intersphinx_mapping = {"python": ("https://docs.python.org/", None)}
 
 numpydoc_show_class_members = False
 
-# Custom numpydoc section for pydra workflow step lists.
-# "Steps" renders as a Notes-style section (freeform content).
-numpydoc_custom_sections = ["Steps"]
+# ---------------------------------------------------------------------------
+# Render numpydoc-style "Steps / -----" sections as a proper RST rubric.
+#
+# numpydoc doesn't know about "Steps", so its content gets mangled.
+# Instead we:
+#   1. (priority 100) Extract and remove the Steps block BEFORE numpydoc runs.
+#   2. (priority 600) Append it as clean RST AFTER numpydoc has finished.
+# ---------------------------------------------------------------------------
+
+_steps_cache: dict = {}  # keyed by (what, name)
+
+
+def _extract_steps_section(app, what, name, obj, options, lines):
+    """Remove the Steps block from lines and cache it for later injection."""
+    import re
+
+    start = None
+    for i in range(len(lines) - 1):
+        if lines[i].strip() == "Steps" and re.fullmatch(r"-{3,}", lines[i + 1].strip()):
+            start = i
+            break
+
+    if start is None:
+        return
+
+    # Collect everything from the "Steps" header to the end of the section
+    # (next section header, or end of docstring).
+    end = start + 2  # skip "Steps" + "-----"
+    while end < len(lines):
+        # A new section header is a non-empty line followed by an underline
+        if (
+            end + 1 < len(lines)
+            and lines[end].strip()
+            and re.fullmatch(r"[-=~^]{3,}", lines[end + 1].strip())
+        ):
+            break
+        end += 1
+
+    steps_content = lines[start + 2 : end]  # content only, not the header
+    _steps_cache[(what, name)] = steps_content
+    del lines[start:end]
+
+
+def _inject_steps_section(app, what, name, obj, options, lines):
+    """Append the Steps block as a ``.. rubric::`` after numpydoc output."""
+    steps_content = _steps_cache.pop((what, name), None)
+    if not steps_content:
+        return
+    lines.append("")
+    lines.append(".. rubric:: Steps")
+    lines.append("")
+    lines.extend(steps_content)
 
 
 # ---------------------------------------------------------------------------
@@ -419,4 +468,8 @@ def _recover_pydra_docstring(app, what, name, obj, options, lines):
 
 
 def setup(app):
+    # Priority 100: extract Steps before numpydoc (priority 500) mangles it.
+    app.connect("autodoc-process-docstring", _extract_steps_section, priority=100)
     app.connect("autodoc-process-docstring", _recover_pydra_docstring)
+    # Priority 600: inject clean RST rubric after numpydoc has finished.
+    app.connect("autodoc-process-docstring", _inject_steps_section, priority=600)

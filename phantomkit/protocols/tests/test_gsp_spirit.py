@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from fileformats.generic import File
+from fileformats.medimage import NiftiGz
 
 from phantomkit.protocols.gsp_spirit import (
     GetContrastFiles,
@@ -12,34 +14,31 @@ from phantomkit.protocols.gsp_spirit import (
 # ── PrepareSessionPaths ───────────────────────────────────────────────────────
 
 
-def test_prepare_session_paths_creates_directories(tmp_path: Path):
+def test_prepare_session_paths_creates_directories(tmp_path: Path) -> None:
     session_dir = tmp_path / "20240101"
     session_dir.mkdir()
-    image = session_dir / "t1.nii.gz"
-    image.touch()
+    image = NiftiGz.sample(dest_dir=session_dir, stem="t1")
 
-    out = PrepareSessionPaths(
-        input_image=str(image), output_base_dir=str(tmp_path / "output")
-    )()
+    out = PrepareSessionPaths(input_image=image, output_base_dir=tmp_path / "output")()
 
     assert out.session_name == "20240101"
     assert Path(out.tmp_dir).exists()
     assert Path(out.vial_dir).exists()
     assert Path(out.metrics_dir).exists()
     assert Path(out.images_template_space_dir).exists()
-    assert out.scanner_space_image.endswith("TemplatePhantom_ScannerSpace.nii.gz")
+    assert str(out.scanner_space_image).endswith("TemplatePhantom_ScannerSpace.nii.gz")
 
 
 # ── GetVialMasks ──────────────────────────────────────────────────────────────
 
 
-def test_get_vial_masks_returns_sorted_list(tmp_path: Path):
+def test_get_vial_masks_returns_sorted_list(tmp_path: Path) -> None:
     vials_dir = tmp_path / "VialsLabelled"
     vials_dir.mkdir()
-    for name in ["VialC.nii.gz", "VialA.nii.gz", "VialB.nii.gz"]:
-        (vials_dir / name).touch()
+    for stem in ["VialC", "VialA", "VialB"]:
+        NiftiGz.sample(dest_dir=vials_dir, stem=stem)
 
-    out = GetVialMasks(template_dir=str(tmp_path))()
+    out = GetVialMasks(template_dir=tmp_path)()
 
     assert [Path(p).name for p in out.out] == [
         "VialA.nii.gz",
@@ -48,35 +47,34 @@ def test_get_vial_masks_returns_sorted_list(tmp_path: Path):
     ]
 
 
-def test_get_vial_masks_empty_directory(tmp_path: Path):
+def test_get_vial_masks_empty_directory(tmp_path: Path) -> None:
     (tmp_path / "VialsLabelled").mkdir()
-    out = GetVialMasks(template_dir=str(tmp_path))()
+    out = GetVialMasks(template_dir=tmp_path)()
     assert out.out == []
 
 
 # ── GetContrastFiles ──────────────────────────────────────────────────────────
 
 
-def test_get_contrast_files_returns_nifti_siblings(tmp_path: Path):
+def test_get_contrast_files_returns_nifti_siblings(tmp_path: Path) -> None:
     session_dir = tmp_path / "session01"
     session_dir.mkdir()
-    for name in ["t2.nii.gz", "t1.nii.gz", "notes.txt"]:
-        (session_dir / name).touch()
-    image = session_dir / "t1.nii.gz"
+    NiftiGz.sample(dest_dir=session_dir, stem="t2")
+    image = NiftiGz.sample(dest_dir=session_dir, stem="t1")
+    (session_dir / "notes.txt").touch()
 
-    out = GetContrastFiles(input_image=str(image))()
+    out = GetContrastFiles(input_image=image)()
 
     assert [Path(p).name for p in out.out] == ["t1.nii.gz", "t2.nii.gz"]
 
 
-def test_get_contrast_files_excludes_non_nifti(tmp_path: Path):
+def test_get_contrast_files_excludes_non_nifti(tmp_path: Path) -> None:
     session_dir = tmp_path / "session01"
     session_dir.mkdir()
-    (session_dir / "scan.nii.gz").touch()
+    image = NiftiGz.sample(dest_dir=session_dir, stem="scan")
     (session_dir / "report.pdf").touch()
-    image = session_dir / "scan.nii.gz"
 
-    out = GetContrastFiles(input_image=str(image))()
+    out = GetContrastFiles(input_image=image)()
 
     assert len(out.out) == 1
     assert Path(out.out[0]).name == "scan.nii.gz"
@@ -85,25 +83,37 @@ def test_get_contrast_files_excludes_non_nifti(tmp_path: Path):
 # ── Top-level workflow graph construction (no execution) ──────────────────────
 
 
-def test_gsp_spirit_build():
+def test_gsp_spirit_build(tmp_path: Path) -> None:
     from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
 
+    image = NiftiGz.sample(dest_dir=tmp_path, stem="t1")
+    template_dir = tmp_path / "template"
+    template_dir.mkdir()
+    rotation_lib = File.sample(dest_dir=tmp_path, stem="rotations")
+
     wf = GspSpiritAnalysis(
-        input_image="/fake/session/t1.nii.gz",
-        template_dir="/fake/template",
-        output_base_dir="/fake/output",
-        rotation_library_file="/fake/rotations.txt",
+        input_image=image,
+        template_dir=template_dir,
+        output_base_dir=tmp_path / "output",
+        rotation_library_file=rotation_lib,
     )
     assert wf is not None
 
 
-def test_gsp_spirit_batch_build():
+def test_gsp_spirit_batch_build(tmp_path: Path) -> None:
     from phantomkit.protocols.gsp_spirit import GspSpiritAnalysisBatch
 
+    images = [
+        NiftiGz.sample(dest_dir=tmp_path / f"session{i}", stem="t1") for i in range(2)
+    ]
+    template_dir = tmp_path / "template"
+    template_dir.mkdir()
+    rotation_lib = File.sample(dest_dir=tmp_path, stem="rotations")
+
     wf = GspSpiritAnalysisBatch(
-        input_images=["/fake/session1/t1.nii.gz", "/fake/session2/t1.nii.gz"],
-        template_dir="/fake/template",
-        output_base_dir="/fake/output",
-        rotation_library_file="/fake/rotations.txt",
+        input_images=images,
+        template_dir=template_dir,
+        output_base_dir=tmp_path / "output",
+        rotation_library_file=rotation_lib,
     )
     assert wf is not None

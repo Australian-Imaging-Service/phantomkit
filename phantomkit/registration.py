@@ -7,7 +7,10 @@ with an iterative orientation search over a rotation library.
 
 import logging
 import re
+from pathlib import Path
 
+from fileformats.generic import File
+from fileformats.medimage import NiftiGz
 from pydra.compose import python, shell, workflow
 from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrStats, MrTransform
 
@@ -43,9 +46,9 @@ class RegistrationSynN(shell.Task["RegistrationSynN.Outputs"]):
 
     executable = "antsRegistrationSyN.sh"
 
-    fixed_image: str = shell.arg(argstr="-f", help="Fixed image.")
-    moving_image: str = shell.arg(argstr="-m", help="Moving image.")
-    output_prefix: str = shell.arg(argstr="-o", help="Output prefix.")
+    fixed_image: NiftiGz = shell.arg(argstr="-f", help="Fixed image.")
+    moving_image: NiftiGz = shell.arg(argstr="-m", help="Moving image.")
+    output_prefix: Path = shell.arg(argstr="-o", help="Output prefix.")
     transform_type: str = shell.arg(
         default="s",
         argstr="-t",
@@ -63,15 +66,15 @@ class RegistrationSynN(shell.Task["RegistrationSynN.Outputs"]):
     )
 
     class Outputs(shell.Outputs):
-        warped_image: str = shell.outarg(
+        warped_image: NiftiGz = shell.outarg(
             path_template="{output_prefix}Warped.nii.gz",
             help="Warped moving image in fixed space.",
         )
-        inverse_warped_image: str = shell.outarg(
+        inverse_warped_image: NiftiGz = shell.outarg(
             path_template="{output_prefix}InverseWarped.nii.gz",
             help="Inverse-warped fixed image in moving space.",
         )
-        out_matrix: str = shell.outarg(
+        out_matrix: File = shell.outarg(
             path_template="{output_prefix}0GenericAffine.mat",
             help="Generic affine transform matrix (.mat).",
         )
@@ -82,7 +85,7 @@ class RegistrationSynN(shell.Task["RegistrationSynN.Outputs"]):
 # ============================================================================
 
 
-def _load_rotations(rotation_library_file: str) -> list[str]:
+def _load_rotations(rotation_library_file: File) -> list[str]:
     """Load rotation matrix strings from a rotation library file."""
     rotations = []
     with open(rotation_library_file, "r") as f:
@@ -96,7 +99,7 @@ def _load_rotations(rotation_library_file: str) -> list[str]:
     return rotations
 
 
-def _create_rotation_matrix_file(rotation_str: str, output_file: str) -> str:
+def _create_rotation_matrix_file(rotation_str: str, output_file: Path) -> Path:
     """Write a 9-element rotation string as a 4×4 affine matrix text file."""
     v = rotation_str.split()
     with open(output_file, "w") as f:
@@ -119,21 +122,21 @@ def ParseMrStatsStdout(stdout: str) -> list[float]:
 
 
 @python.define(outputs=["vial_name", "regridded_path", "vial_mask_out"])
-def PrepVialCheckPaths(vial_mask: str, tmp_dir: str) -> tuple[str, str, str]:
+def PrepVialCheckPaths(vial_mask: NiftiGz, tmp_dir: Path) -> tuple[str, Path, NiftiGz]:
     """Derive vial name and regridded-mask output path; pass vial_mask through."""
-    from pathlib import Path
+    from pathlib import Path as _Path
 
     vial_name = (
-        Path(vial_mask)
+        _Path(vial_mask)
         .name.replace(".nii.gz", "")
         .replace(".nii", "")
         .replace("Vial", "")
         .replace("vial", "")
         .strip()
     )
-    tmp = Path(tmp_dir) / "check_reg"
+    tmp = _Path(tmp_dir) / "check_reg"
     tmp.mkdir(parents=True, exist_ok=True)
-    return vial_name, str(tmp / f"{vial_name}_regridded.nii.gz"), vial_mask
+    return vial_name, tmp / f"{vial_name}_regridded.nii.gz", vial_mask
 
 
 @python.define(outputs=["is_valid"])
@@ -185,9 +188,9 @@ def AggregateVialCheck(
 
 @workflow.define
 def CheckRegistration(
-    warped_image: str,
-    vial_masks: list[str],
-    tmp_dir: str,
+    warped_image: NiftiGz,
+    vial_masks: list[NiftiGz],
+    tmp_dir: Path,
 ) -> bool:
     """
     Check whether a registration is correctly oriented.
@@ -200,8 +203,6 @@ def CheckRegistration(
     A combined **AggregateVialCheck** python task verifies intensity ranking
     across all vials.
     """
-    from fileformats.medimage import NiftiGz
-
     prep = workflow.add(
         PrepVialCheckPaths(vial_mask=vial_masks, tmp_dir=tmp_dir).split("vial_mask"),
         name="prep",
@@ -211,7 +212,7 @@ def CheckRegistration(
         MrGrid(
             in_file=prep.vial_mask_out,
             operation="regrid",
-            template=NiftiGz(warped_image),
+            template=warped_image,
             out_file=prep.regridded_path,
             interp="nearest",
             quiet=True,
@@ -222,7 +223,7 @@ def CheckRegistration(
 
     stats = workflow.add(
         MrStats(
-            image_=NiftiGz(warped_image),
+            image_=warped_image,
             mask=regrid.out_file,
             output=["mean", "std"],
             quiet=True,
@@ -257,16 +258,16 @@ def CheckRegistration(
     ]
 )
 def _RegistrationStep(
-    image_to_register: str,
-    original_image: str,
-    applied_rotation: str | None,
-    template_phantom: str,
+    image_to_register: NiftiGz,
+    original_image: NiftiGz,
+    applied_rotation: File | None,
+    template_phantom: NiftiGz,
     rotations: list[str],
-    vial_masks: list[str],
+    vial_masks: list[NiftiGz],
     session_name: str,
-    tmp_dir: str,
+    tmp_dir: Path,
     iteration: int,
-) -> tuple[str, str, str, int, str, str | None]:
+) -> tuple[NiftiGz, File, NiftiGz, int, NiftiGz, File | None]:
     """
     Single step of the iterative registration loop.
 
@@ -275,11 +276,9 @@ def _RegistrationStep(
     remain, the next rotation is applied to *original_image* and this
     workflow calls itself recursively with ``iteration + 1``.
     """
-    from pathlib import Path
-    from fileformats.medimage import NiftiGz
-    from fileformats.generic import File
+    from pathlib import Path as _Path
 
-    tmp = Path(tmp_dir)
+    tmp = _Path(tmp_dir)
     tmp.mkdir(parents=True, exist_ok=True)
     logger.info("=== Iteration %d ===", iteration)
 
@@ -287,7 +286,7 @@ def _RegistrationStep(
         RegistrationSynN(
             fixed_image=template_phantom,
             moving_image=image_to_register,
-            output_prefix=str(tmp / f"{session_name}_Transformed{iteration}_"),
+            output_prefix=tmp / f"{session_name}_Transformed{iteration}_",
             transform_type="r",
             num_threads=8,
             use_histogram_matching=1,
@@ -299,7 +298,7 @@ def _RegistrationStep(
         CheckRegistration(
             warped_image=reg.warped_image,
             vial_masks=vial_masks,
-            tmp_dir=str(tmp / "check"),
+            tmp_dir=tmp / "check",
         ),
         name="check",
     )
@@ -316,14 +315,14 @@ def _RegistrationStep(
         )
     elif iteration < len(rotations):
         logger.warning("Registration check failed, applying rotation %d", iteration)
-        next_rotation_file = str(tmp / f"rotation_{iteration + 1}.txt")
+        next_rotation_file = tmp / f"rotation_{iteration + 1}.txt"
         _create_rotation_matrix_file(rotations[iteration], next_rotation_file)
 
         rot = workflow.add(
             MrTransform(
-                in_file=NiftiGz(original_image),
-                linear=File(next_rotation_file),
-                out_file=str(tmp / f"{session_name}_iteration{iteration + 1}.nii.gz"),
+                in_file=original_image,
+                linear=next_rotation_file,
+                out_file=tmp / f"{session_name}_iteration{iteration + 1}.nii.gz",
                 interp="nearest",
                 force=True,
             ),
@@ -339,7 +338,7 @@ def _RegistrationStep(
                 rotations=rotations,
                 vial_masks=vial_masks,
                 session_name=session_name,
-                tmp_dir=str(tmp.parent / f"step_{iteration + 1}"),
+                tmp_dir=tmp.parent / f"step_{iteration + 1}",
                 iteration=iteration + 1,
             ),
             name="next_step",
@@ -369,13 +368,13 @@ def _RegistrationStep(
     ]
 )
 def IterativeRegistration(
-    input_image: str,
-    template_phantom: str,
-    rotation_library_file: str,
-    vial_masks: list[str],
+    input_image: NiftiGz,
+    template_phantom: NiftiGz,
+    rotation_library_file: File,
+    vial_masks: list[NiftiGz],
     session_name: str,
-    tmp_dir: str,
-) -> tuple[str, str, str, int, str, str | None]:
+    tmp_dir: Path,
+) -> tuple[NiftiGz, File, NiftiGz, int, NiftiGz, File | None]:
     """
     Iteratively register the input image to the template phantom.
 
@@ -383,9 +382,9 @@ def IterativeRegistration(
     delegates to **_RegistrationStep** which recurses until the orientation
     check passes or all rotations are exhausted.
     """
-    from pathlib import Path
+    from pathlib import Path as _Path
 
-    tmp = Path(tmp_dir)
+    tmp = _Path(tmp_dir)
     tmp.mkdir(parents=True, exist_ok=True)
 
     rotations = _load_rotations(rotation_library_file)
@@ -399,7 +398,7 @@ def IterativeRegistration(
             rotations=rotations,
             vial_masks=vial_masks,
             session_name=session_name,
-            tmp_dir=str(tmp / "step_1"),
+            tmp_dir=tmp / "step_1",
             iteration=1,
         ),
         name="step",
@@ -416,24 +415,21 @@ def IterativeRegistration(
 
 @workflow.define
 def SaveTemplateInScannerSpace(
-    inverse_warped: str,
-    rotation_matrix_file: str | None,
+    inverse_warped: NiftiGz,
+    rotation_matrix_file: File | None,
     iteration: int,
-    output_path: str,
-) -> str:
+    output_path: Path,
+) -> NiftiGz:
     """
     Save the template phantom warped into scanner (subject) space.
 
     Uses **MrConvert** (iteration == 1, no rotation) or **MrTransform** with
     the inverse rotation (iteration > 1).
     """
-    from fileformats.medimage import NiftiGz
-    from fileformats.generic import File
-
     if iteration == 1:
         node = workflow.add(
             MrConvert(
-                in_file=NiftiGz(inverse_warped),
+                in_file=inverse_warped,
                 out_file=output_path,
                 quiet=True,
                 force=True,
@@ -443,8 +439,8 @@ def SaveTemplateInScannerSpace(
     else:
         node = workflow.add(
             MrTransform(
-                in_file=NiftiGz(inverse_warped),
-                linear=File(rotation_matrix_file),
+                in_file=inverse_warped,
+                linear=rotation_matrix_file,
                 out_file=output_path,
                 interp="nearest",
                 inverse=True,

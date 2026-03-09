@@ -8,6 +8,8 @@ plotting functions in the other plotting modules as pydra tasks.
 import logging
 from pathlib import Path
 
+from fileformats.generic import File
+from fileformats.medimage import NiftiGz
 from pydra.compose import python, shell, workflow
 from pydra.tasks.mrtrix3.v3_1 import MrGrid, MrMath
 
@@ -25,12 +27,12 @@ class MrCat(shell.Task["MrCat.Outputs"]):
 
     executable = "mrcat"
 
-    in_files: list[str] = shell.arg(
+    in_files: list[NiftiGz] = shell.arg(
         argstr="",
         position=1,
         help="the input image(s).",
     )
-    out_file: str = shell.arg(
+    out_file: Path = shell.arg(
         argstr="",
         position=2,
         help="the output image.",
@@ -47,7 +49,7 @@ class MrCat(shell.Task["MrCat.Outputs"]):
     )
 
     class Outputs(shell.Outputs):
-        out_file: str = shell.outarg(
+        out_file: NiftiGz = shell.outarg(
             argstr="",
             position=2,
             path_template="{out_file}",
@@ -65,7 +67,7 @@ class MrView(shell.Task["MrView.Outputs"]):
 
     executable = "mrview"
 
-    image: str = shell.arg(
+    image: NiftiGz = shell.arg(
         argstr="",
         position=1,
         help="Input image to display.",
@@ -80,7 +82,7 @@ class MrView(shell.Task["MrView.Outputs"]):
         argstr="-plane",
         help="Plane to display (0=sagittal, 1=coronal, 2=axial).",
     )
-    roi_load: str | None = shell.arg(
+    roi_load: NiftiGz | None = shell.arg(
         default=None,
         argstr="-roi.load",
         help="ROI overlay image to load.",
@@ -110,7 +112,7 @@ class MrView(shell.Task["MrView.Outputs"]):
         argstr="-fullscreen",
         help="Display fullscreen.",
     )
-    capture_folder: str = shell.arg(
+    capture_folder: Path = shell.arg(
         argstr="-capture.folder",
         help="Directory to save the screenshot.",
     )
@@ -130,7 +132,7 @@ class MrView(shell.Task["MrView.Outputs"]):
     )
 
     class Outputs(shell.Outputs):
-        out_png: str = shell.outarg(
+        out_png: File = shell.outarg(
             path_template="{capture_folder}/{capture_prefix}0000.png",
             help="Captured screenshot (mrview appends '0000' to the prefix).",
         )
@@ -143,25 +145,23 @@ class MrView(shell.Task["MrView.Outputs"]):
 
 @workflow.define
 def BuildRoiOverlay(
-    vial_masks: list[str], reference_image: str, prefix: str, tmp_dir: str
-) -> str:
+    vial_masks: list[NiftiGz], reference_image: NiftiGz, prefix: str, tmp_dir: Path
+) -> NiftiGz:
     """Regrid each vial mask to the reference image space and combine into one overlay."""
-    from fileformats.medimage import NiftiGz
-
     tmp = Path(tmp_dir)
     tmp.mkdir(parents=True, exist_ok=True)
-    cat_tmp = str(tmp / f"{prefix}_cat_tmp.nii.gz")
-    roi_overlay = str(tmp / f"{prefix}_VialsCombined.nii.gz")
+    cat_tmp = tmp / f"{prefix}_cat_tmp.nii.gz"
+    roi_overlay = tmp / f"{prefix}_VialsCombined.nii.gz"
 
-    regridded: list[str] = []
+    regridded: list = []
     for vial_mask in vial_masks:  # triggers runtime fallback
         vial_name = Path(vial_mask).name.replace(".nii.gz", "").replace(".nii", "")
         out = str(tmp / f"{prefix}_{vial_name}.nii.gz")
         grid = workflow.add(
             MrGrid(
-                in_file=NiftiGz(vial_mask),
+                in_file=vial_mask,
                 operation="regrid",
-                template=NiftiGz(reference_image),
+                template=reference_image,
                 out_file=out,
                 interp="nearest",
                 force=True,
@@ -183,9 +183,9 @@ def BuildRoiOverlay(
 
 @workflow.define
 def GeneratePlots(
-    contrast_files: list[str],
-    metrics_dir: str,
-    vial_dir: str,
+    contrast_files: list[NiftiGz],
+    metrics_dir: Path,
+    vial_dir: Path,
     session_name: str,
 ) -> None:
     """
@@ -196,6 +196,7 @@ def GeneratePlots(
     Screenshots use mrview via MrView.
     """
     import re as _re
+    from pathlib import Path as _Path
     from phantomkit.plotting.vial_intensity import plot_vial_intensity
     from phantomkit.plotting.maps_ir import (
         plot_vial_means_std_pub_from_nifti as plot_ir,
@@ -204,28 +205,26 @@ def GeneratePlots(
         plot_vial_means_std_pub_from_nifti as plot_te,
     )
 
-    metrics_path = Path(metrics_dir)
-    vial_path = Path(vial_dir)
-    tmp_vial_dir = str(vial_path / "tmp")
+    metrics_path = _Path(metrics_dir)
+    vial_path = _Path(vial_dir)
+    tmp_vial_dir = vial_path / "tmp"
 
-    vial_masks_list = sorted(
-        str(m) for m in vial_path.glob("*.nii.gz")
-    )  # triggers runtime fallback
+    vial_masks_list = sorted(vial_path.glob("*.nii.gz"))  # triggers runtime fallback
 
     # Per-contrast scatter plots
     for contrast_file in contrast_files:
-        contrast_path = Path(contrast_file)
+        contrast_path = _Path(contrast_file)
         contrast_name = contrast_path.stem
         mean_csv = str(metrics_path / f"{session_name}_{contrast_name}_mean_matrix.csv")
         std_csv = str(metrics_path / f"{session_name}_{contrast_name}_std_matrix.csv")
-        if not Path(mean_csv).exists():
+        if not _Path(mean_csv).exists():
             continue
 
         output_plot = str(
             metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
         )
 
-        roi_image: str | None = None
+        roi_image: File | None = None
         if vial_masks_list:
             overlay = workflow.add(
                 BuildRoiOverlay(
@@ -271,13 +270,13 @@ def GeneratePlots(
         ("ir", plot_ir, "ir_map_PLOTmeanstd_TEmapping.png"),
         ("te", plot_te, "TE_map_PLOTmeanstd_TEmapping.png"),
     ]:
-        matching = [f for f in contrast_files if _matches(Path(f).stem, contrast_type)]
+        matching = [f for f in contrast_files if _matches(_Path(f).stem, contrast_type)]
         if not matching:
             continue
 
         output_plot = str(metrics_path / f"{session_name}_{suffix}")
 
-        roi_image_arg = str(Path(tmp_vial_dir) / f"roi_overlay_{contrast_type}.png")
+        roi_image_arg: File | None = None
         if vial_masks_list:
             overlay = workflow.add(
                 BuildRoiOverlay(
@@ -316,12 +315,13 @@ def GeneratePlots(
 
 
 @python.define
-def Cleanup(dirs: list[str]) -> None:
+def Cleanup(dirs: list[Path]) -> None:
     """Remove temporary directories."""
     import shutil
+    from pathlib import Path as _Path
 
     for d in dirs:
-        p = Path(d)
+        p = _Path(d)
         if p.exists():
             try:
                 shutil.rmtree(p)

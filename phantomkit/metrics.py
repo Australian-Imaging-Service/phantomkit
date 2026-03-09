@@ -10,6 +10,8 @@ import logging
 import os.path
 from pathlib import Path
 
+from fileformats.generic import File
+from fileformats.medimage import NiftiGz
 from pydra.compose import python, workflow
 from pydra.tasks.ants.v2.resampling.apply_transforms import ApplyTransforms
 from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrInfo, MrStats, MrTransform
@@ -35,7 +37,7 @@ def ParseMrInfoSize(stdout: str) -> tuple[bool, bool, int]:
 
 
 @python.define
-def CopyFile(src: str, dst: str) -> str:
+def CopyFile(src: File, dst: Path) -> File:
     """Copy *src* to *dst* and return *dst*."""
     import shutil
 
@@ -45,26 +47,28 @@ def CopyFile(src: str, dst: str) -> str:
 
 @python.define(outputs=["vial_name", "tmp_path", "output_path", "vial_mask_out"])
 def PrepVialTransformPaths(
-    vial_mask: str, output_vial_dir: str
-) -> tuple[str, str, str, str]:
+    vial_mask: NiftiGz, output_vial_dir: Path
+) -> tuple[str, Path, Path, NiftiGz]:
     """Derive per-vial output paths and pass vial_mask through."""
-    output_dir = Path(output_vial_dir)
+    from pathlib import Path as _Path
+
+    output_dir = _Path(output_vial_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     tmp_vial_dir = output_dir.parent / "tmp_vials"
     tmp_vial_dir.mkdir(parents=True, exist_ok=True)
     vial_name = (
-        Path(vial_mask).name.replace(".nii.gz", "").replace(".nii", "").split(".")[0]
+        _Path(vial_mask).name.replace(".nii.gz", "").replace(".nii", "").split(".")[0]
     )
     return (
         vial_name,
-        str(tmp_vial_dir / f"{vial_name}.nii"),
-        str(output_dir / f"{vial_name}.nii.gz"),
+        tmp_vial_dir / f"{vial_name}.nii",
+        output_dir / f"{vial_name}.nii.gz",
         vial_mask,
     )
 
 
 @python.define
-def GatherList(items: list[str]) -> list[str]:
+def GatherList(items: list[NiftiGz]) -> list[NiftiGz]:
     """Identity task used to collect a combined split into a typed list output."""
     return list(items)
 
@@ -76,13 +80,13 @@ def GatherList(items: list[str]) -> list[str]:
 
 @workflow.define
 def TransformVialsToSubjectSpace(
-    vial_masks: list[str],
-    reference_image: str,
-    transform_matrix: str,
-    rotation_matrix_file: str | None,
+    vial_masks: list[NiftiGz],
+    reference_image: NiftiGz,
+    transform_matrix: File,
+    rotation_matrix_file: File | None,
     iteration: int,
-    output_vial_dir: str,
-) -> list[str]:
+    output_vial_dir: Path,
+) -> list[NiftiGz]:
     """
     Transform each vial mask from template space into subject (scanner) space.
 
@@ -95,9 +99,6 @@ def TransformVialsToSubjectSpace(
 
     A combined **GatherList** collects all per-vial output paths.
     """
-    from fileformats.medimage import NiftiGz
-    from fileformats.generic import File
-
     prep = workflow.add(
         PrepVialTransformPaths(
             vial_mask=vial_masks, output_vial_dir=output_vial_dir
@@ -108,7 +109,7 @@ def TransformVialsToSubjectSpace(
     at = workflow.add(
         ApplyTransforms(
             input_image=prep.vial_mask_out,
-            reference_image=NiftiGz(reference_image),
+            reference_image=reference_image,
             transforms=[f"[{transform_matrix}, 1]"],
             interpolation="Linear",
             out_postfix="_warped",
@@ -125,7 +126,7 @@ def TransformVialsToSubjectSpace(
         final = workflow.add(
             MrTransform(
                 in_file=copy.out,
-                linear=File(rotation_matrix_file),
+                linear=rotation_matrix_file,
                 out_file=prep.output_path,
                 interp="nearest",
                 inverse=True,
@@ -153,11 +154,11 @@ def TransformVialsToSubjectSpace(
 
 @workflow.define
 def ExtractMetricsFromContrasts(
-    contrast_files: list[str],
-    vial_masks: list[str],
-    output_metrics_dir: str,
+    contrast_files: list[NiftiGz],
+    vial_masks: list[NiftiGz],
+    output_metrics_dir: Path,
     session_name: str,
-) -> str:
+) -> Path:
     """
     Extract per-vial statistics (mean, median, std, min, max) from every
     contrast image and write per-metric CSV files.
@@ -174,15 +175,15 @@ def ExtractMetricsFromContrasts(
     Returns the metrics directory path.
     """
     import pandas as pd
-    from fileformats.medimage import NiftiGz
+    from pathlib import Path as _Path
 
-    metrics_dir = Path(output_metrics_dir)
+    metrics_dir = _Path(output_metrics_dir)
     metrics_dir.mkdir(parents=True, exist_ok=True)
     tmp_vol_dir = metrics_dir.parent / "tmp_vols"
     tmp_vol_dir.mkdir(parents=True, exist_ok=True)
 
     for contrast_file in contrast_files:
-        contrast_path = Path(contrast_file)
+        contrast_path = _Path(contrast_file)
         contrast_name = contrast_path.stem
         clean_name = contrast_name.replace(".nii", "").replace(".gz", "")
 
@@ -209,7 +210,7 @@ def ExtractMetricsFromContrasts(
 
         for vial_mask in vial_masks:
             vial_name = (
-                Path(vial_mask)
+                _Path(vial_mask)
                 .name.replace(".nii.gz", "")
                 .replace(".nii", "")
                 .split(".")[0]
@@ -219,9 +220,9 @@ def ExtractMetricsFromContrasts(
 
             grid = workflow.add(
                 MrGrid(
-                    in_file=NiftiGz(vial_mask),
+                    in_file=vial_mask,
                     operation="regrid",
-                    template=NiftiGz(contrast_file),
+                    template=contrast_file,
                     out_file=str(tmp_vol_dir / f"{clean_name}_{vial_name}.nii.gz"),
                     interp="nearest",
                     force=True,
@@ -238,7 +239,7 @@ def ExtractMetricsFromContrasts(
                 else:
                     conv = workflow.add(
                         MrConvert(
-                            in_file=NiftiGz(contrast_file),
+                            in_file=contrast_file,
                             coord=[(3, vol_idx)],
                             out_file=str(
                                 tmp_vol_dir / f"{clean_name}_vol{vol_idx}.nii.gz"
@@ -252,8 +253,8 @@ def ExtractMetricsFromContrasts(
 
                 stats = workflow.add(
                     MrStats(
-                        image_=NiftiGz(vol_file),
-                        mask=NiftiGz(regridded_mask),
+                        image_=vol_file,
+                        mask=regridded_mask,
                         output=["mean", "median", "std", "min", "max"],
                         quiet=True,
                     ),
@@ -281,19 +282,19 @@ def ExtractMetricsFromContrasts(
             pd.DataFrame(rows).to_csv(csv_file, index=False)
             logger.info("Saved: %s", csv_file.name)
 
-    return str(metrics_dir)
+    return metrics_dir
 
 
 @workflow.define
 def TransformContrastsToTemplateSpace(
-    contrast_files: list[str],
-    transform_matrix: str,
-    rotation_matrix_file: str | None,
+    contrast_files: list[NiftiGz],
+    transform_matrix: File,
+    rotation_matrix_file: File | None,
     iteration: int,
-    template_phantom: str,
-    tmp_dir: str,
-    output_dir: str,
-) -> str:
+    template_phantom: NiftiGz,
+    tmp_dir: Path,
+    output_dir: Path,
+) -> Path:
     """
     Forward-transform every contrast image into template space.
 
@@ -309,15 +310,15 @@ def TransformContrastsToTemplateSpace(
 
     Returns the template-space output directory path.
     """
-    from fileformats.medimage import NiftiGz
-    from fileformats.generic import File
+    from pathlib import Path as _Path
+    from fileformats.generic import File as _File
 
-    output_path = Path(output_dir)
+    output_path = _Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
     copied_files = []
     for contrast_file in contrast_files:
-        contrast_path = Path(contrast_file)
+        contrast_path = _Path(contrast_file)
         contrast_name = contrast_path.stem.replace(".nii", "")
         logger.info("Transforming: %s", contrast_path.name)
 
@@ -326,8 +327,8 @@ def TransformContrastsToTemplateSpace(
         if iteration > 1 and rotation_matrix_file:
             rot = workflow.add(
                 MrTransform(
-                    in_file=NiftiGz(contrast_file),
-                    linear=File(rotation_matrix_file),
+                    in_file=contrast_file,
+                    linear=rotation_matrix_file,
                     out_file=f"{contrast_name}_rotated.nii.gz",
                     interp="linear",
                     force=True,
@@ -363,7 +364,7 @@ def TransformContrastsToTemplateSpace(
         at = workflow.add(
             ApplyTransforms(
                 input_image=transform_input,
-                reference_image=NiftiGz(template_phantom),
+                reference_image=template_phantom,
                 transforms=[transform_matrix],
                 input_image_type=3 if parse_size.is_4d else 0,
                 interpolation="Linear",
@@ -375,7 +376,7 @@ def TransformContrastsToTemplateSpace(
         copy_file = workflow.add(
             CopyFile(
                 src=at.output_image,
-                dst=str(output_path / contrast_path.name),
+                dst=output_path / contrast_path.name,
             ),
             name=f"copy_{contrast_name}",
         )
@@ -384,8 +385,8 @@ def TransformContrastsToTemplateSpace(
         copied_files.append(copy_file.out)
 
     @python.define
-    def CommonPath(file_paths: list[File]) -> Path:
-        return Path(os.path.commonpath(file_paths))
+    def CommonPath(file_paths: list[_File]) -> _Path:
+        return _Path(os.path.commonpath(file_paths))
 
     common_path = workflow.add(CommonPath(copied_files))
 

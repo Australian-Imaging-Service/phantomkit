@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 
 from fileformats.generic import Directory, File
-from fileformats.medimage import Nifti
+from fileformats.medimage import NiftiGz
 from pydra.compose import python, workflow
 
 from phantomkit.registration import (
@@ -43,47 +43,53 @@ logger = logging.getLogger(__name__)
     ]
 )
 def PrepareSessionPaths(
-    input_image: str,
-    output_base_dir: str,
-) -> tuple[str, str, str, str, str, str, str]:
+    input_image: NiftiGz,
+    output_base_dir: Path | None = None,
+) -> tuple[str, Path, Path, Path, Path, Path, Path]:
     """
     Derive all session output paths from the input image location, create the
     directories, and return the path strings for use by downstream tasks.
     """
-    session_name = Path(input_image).parent.name
-    output_dir = Path(output_base_dir) / session_name
+    from pathlib import Path as _Path
+
+    if output_base_dir is None:
+        output_base_dir = _Path.cwd()
+    session_name = _Path(input_image).parent.name
+    output_dir = _Path(output_base_dir) / session_name
     tmp_dir = output_dir / "tmp"
     vial_dir = output_dir / "vial_segmentations"
     metrics_dir = output_dir / "metrics"
     images_template_space_dir = output_dir / "images_template_space"
-    scanner_space_image = str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz")
+    scanner_space_image = output_dir / "TemplatePhantom_ScannerSpace.nii.gz"
 
     for d in [tmp_dir, vial_dir, metrics_dir, images_template_space_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
     return (
         session_name,
-        str(output_dir),
-        str(tmp_dir),
-        str(vial_dir),
-        str(metrics_dir),
-        str(images_template_space_dir),
+        output_dir,
+        tmp_dir,
+        vial_dir,
+        metrics_dir,
+        images_template_space_dir,
         scanner_space_image,
     )
 
 
 @python.define
-def GetVialMasks(template_dir: str) -> list[str]:
+def GetVialMasks(template_dir: Directory) -> list[NiftiGz]:
     """Return sorted list of vial mask paths from the VialsLabelled directory."""
-    return sorted(
-        str(m) for m in (Path(template_dir) / "VialsLabelled").glob("*.nii.gz")
-    )
+    from pathlib import Path as _Path
+
+    return sorted((_Path(template_dir) / "VialsLabelled").glob("*.nii.gz"))
 
 
 @python.define
-def GetContrastFiles(input_image: str) -> list[str]:
+def GetContrastFiles(input_image: NiftiGz) -> list[NiftiGz]:
     """Return sorted list of all NIfTI files in the same directory as input_image."""
-    return sorted(str(f) for f in Path(input_image).parent.glob("*.nii.gz"))
+    from pathlib import Path as _Path
+
+    return sorted(_Path(input_image).parent.glob("*.nii.gz"))
 
 
 # ============================================================================
@@ -100,11 +106,11 @@ def GetContrastFiles(input_image: str) -> list[str]:
     ]
 )
 def GspSpiritAnalysis(
-    input_image: Nifti,
+    input_image: NiftiGz,
     template_dir: Directory,
     rotation_library_file: File,
-    output_base_dir: Directory | None = None,
-) -> tuple[Directory, str, str, str]:
+    output_base_dir: Path | None = None,
+) -> tuple[Path, Path, Path, NiftiGz]:
     """
     Pydra workflow for processing a single GSP SPIRIT phantom MRI session.
 
@@ -114,32 +120,33 @@ def GspSpiritAnalysis(
 
     Parameters
     ----------
-    input_image : str
+    input_image : NiftiGz
         Path to the primary NIfTI image for the session (e.g. the T1 MPRAGE).
         All NIfTI files in the same directory are treated as contrast images.
-    template_dir : str
+    template_dir : Directory
         Path to the GSP SPIRIT template directory.  Must contain
         ``ImageTemplate.nii.gz`` and a ``VialsLabelled/`` sub-directory of
         per-vial mask files.
-    output_base_dir : str
-        Root output directory.  A sub-directory named after the session
-        (parent folder of *input_image*) is created automatically.
-    rotation_library_file : str
+    rotation_library_file : File
         Path to a text file listing quoted ANTs rotation strings, one per line,
         used during the iterative orientation search.
+    output_base_dir : Path, optional
+        Root output directory.  A sub-directory named after the session
+        (parent folder of *input_image*) is created automatically.
+        Defaults to the current working directory.
 
     Returns
     -------
-    metrics_dir : str
+    metrics_dir : Path
         Directory containing per-contrast CSV files of vial signal statistics
         (mean, median, std, min, max).
-    vial_dir : str
+    vial_dir : Path
         Directory containing the vial mask NIfTI files warped into subject
         (scanner) space.
-    images_template_space_dir : str
+    images_template_space_dir : Path
         Directory containing all contrast images warped into template space.
-    scanner_space_image : str
-        Path to the template phantom image warped back into scanner space.
+    scanner_space_image : NiftiGz
+        The template phantom image warped back into scanner space.
 
     Steps
     -----
@@ -160,7 +167,7 @@ def GspSpiritAnalysis(
        (MrGrid for ROI overlays, external Python scripts for plots)
     10. **Cleanup** — remove temporary directories
     """
-    template_phantom = str(Path(template_dir) / "ImageTemplate.nii.gz")
+    template_phantom = Path(template_dir) / "ImageTemplate.nii.gz"
 
     paths = workflow.add(
         PrepareSessionPaths(
@@ -262,10 +269,10 @@ def GspSpiritAnalysis(
 
 @workflow.define(outputs=["results"])
 def GspSpiritAnalysisBatch(
-    input_images: list[str],
-    template_dir: str,
-    output_base_dir: str,
-    rotation_library_file: str,
+    input_images: list[NiftiGz],
+    template_dir: Directory,
+    output_base_dir: Path,
+    rotation_library_file: File,
 ) -> list:
     """
     Pydra workflow for batch-processing multiple phantom sessions in parallel.
