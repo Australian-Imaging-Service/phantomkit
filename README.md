@@ -40,11 +40,48 @@ outputs = wf(cache_root="/data/cache-root")
 Or via the command line:
 
 ```bash
-phantomkit run gsp-spirit /data/session01/t1_mprage.nii.gz \
+# Single session
+phantom-process run gsp-spirit /data/session01/t1_mprage.nii.gz \
     --template-dir /templates/gsp_spirit \
-    --output-dir /results \
-    --rotation-lib /templates/gsp_spirit/rotations.txt
+    --rotation-library-file /templates/gsp_spirit/rotations.txt \
+    --output-base-dir /results
+
+# Batch — process every matching image found under /data/
+phantom-process run gsp-spirit /data/ \
+    --template-dir /templates/gsp_spirit \
+    --rotation-library-file /templates/gsp_spirit/rotations.txt \
+    --output-base-dir /results \
+    --pattern "*t1*mprage*.nii.gz"
+
+# List available protocols
+phantom-process list
 ```
+
+### Plotting
+
+Generate QA plots from existing CSV metric files:
+
+```bash
+# Vial intensity scatter plot for one contrast
+phantom-process plot vial-intensity \
+    /results/session01/metrics/session01_t1_mprage_mean_matrix.csv scatter \
+    --std_csv /results/session01/metrics/session01_t1_mprage_std_matrix.csv \
+    --output  /results/session01/metrics/session01_t1_PLOTmeanstd.png
+
+# T1 inversion-recovery parametric map plot
+phantom-process plot maps-ir \
+    /results/session01/images_template_space/ir_*.nii.gz \
+    --metric_dir /results/session01/metrics \
+    --output     /results/session01/metrics/session01_T1map_plot.png
+
+# T2 spin-echo parametric map plot
+phantom-process plot maps-te \
+    /results/session01/images_template_space/te_*.nii.gz \
+    --metric_dir /results/session01/metrics \
+    --output     /results/session01/metrics/session01_T2map_plot.png
+```
+
+See the [CLI documentation](https://australian-imaging-service.github.io/phantomkit/cli.html) for the full option reference.
 
 ## License
 

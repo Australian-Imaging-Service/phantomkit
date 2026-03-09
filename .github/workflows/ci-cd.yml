@@ -151,7 +151,7 @@ jobs:
       if: steps.deployable.outputs.DEPLOY
       uses: peaceiris/actions-gh-pages@v3
       with:
-        github_token: ${{ secrets.GH_TOKEN }}
+        deploy_key: ${{ secrets.GHPAGES_DEPLOY_KEY }}
         publish_dir: docs-build
 
 # Deploy on tags if PYPI_API_TOKEN is defined in the repository secrets.
