@@ -1,17 +1,53 @@
-# Gold Standard Phantom Metrics
+# PhantomKit
 
-[![CI/CD](https://github.com/australian-imaging-service/gold-standard-phantom-metrics/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/australian-imaging-service/gold-standard-phantom-metrics/actions/workflows/ci-cd.yml)
-[![Codecov](https://codecov.io/gh/australian-imaging-service/gold-standard-phantom-metrics/branch/main/graph/badge.svg?token=UIS0OGPST7)](https://codecov.io/gh/australian-imaging-service/gold-standard-phantom-metrics)
+<img src="docs/source/_static/logo.svg" alt="PhantomKit" width="480"/>
+
+[![CI/CD](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/australian-imaging-service/phantomkit/actions/workflows/ci-cd.yml)
+[![Codecov](https://codecov.io/gh/australian-imaging-service/phantomkit/branch/main/graph/badge.svg?token=UIS0OGPST7)](https://codecov.io/gh/australian-imaging-service/phantomkit)
+[![PyPI version](https://img.shields.io/pypi/v/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
+[![Python versions](https://img.shields.io/pypi/pyversions/phantomkit.svg)](https://pypi.python.org/pypi/phantomkit/)
+
+**PhantomKit** is a Python toolkit for automated quality assurance (QA) of medical imaging scanners using physical phantoms. It provides pydra-based workflows that register phantom scans to a reference template, extract per-vial signal statistics across multiple contrast types, and generate publication-quality plots — supporting both MRI and PET phantom protocols.
+
+## Features
+
+- **Template-based registration** — iterative ANTs SyN registration with automatic orientation search across a rotation library
+- **Vial metric extraction** — per-vial mean, median, std, min and max across all contrast images, written to CSV
+- **Plotting** — scatter plots of vial intensity and parametric map plots (T1/IR, T2/TE) with mrview ROI overlays
+- **Protocol support** — extensible `protocols` sub-package for phantom- and project-specific workflow configurations
+- **Parallel batch processing** — pydra-native splitting and combining for multi-session datasets
 
 ## Installation
 
 ```bash
-python -m pip install gsp-metrics
+python -m pip install phantomkit
 ```
 
-## (Very) Basic usage
+## Basic usage
 
 ```python
-import gsp_metrics
+from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
+import pydra
 
+wf = GspSpiritAnalysis(
+    input_image="/data/session01/t1_mprage.nii.gz",
+    template_dir="/templates/gsp_spirit",
+    output_base_dir="/results",
+    rotation_library_file="/templates/gsp_spirit/rotations.txt",
+)
+with pydra.Submitter(plugin="cf") as sub:
+    sub(wf)
 ```
+
+Or via the command line:
+
+```bash
+phantom-process /data/session01/t1_mprage.nii.gz \
+    --template-dir /templates/gsp_spirit \
+    --output-dir /results \
+    --rotation-lib /templates/gsp_spirit/rotations.txt
+```
+
+## License
+
+Copyright 2026 Australian Imaging Service. Released under the [Apache License 2.0](LICENSE).

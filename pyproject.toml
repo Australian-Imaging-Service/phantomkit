@@ -18,6 +18,8 @@ dependencies = [
     "numpy >=1.24.0",
     "pandas >=2.0.0",
     "pydra >=1.0a7",
+    "pydra-tasks-ants",
+    "pydra-tasks-mrtrix3",
     "scipy >=1.10.0",
     "typing_extensions >=4.6.3; python_version < '4.0'",
 ]
