@@ -25,13 +25,13 @@ dependencies = [
 ]
 
 authors = [
-    { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
     { name = "Thomas G. Close", email = "tom.g.close@gmail.com" },
+    { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
     { name = "Arkiev D'Souza", email = "arkiev.dsouza@sydney.edu.au" }
 ]
 maintainers = [
-    { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
     { name = "Thomas G. Close", email = "tom.g.close@gmail.com" },
+    { name = "Hugh McCloskey", email = "Hugh.Mccloskey@sahmri.com" },
     { name = "Arkiev D'Souza", email = "arkiev.dsouza@sydney.edu.au" }
 ]
 keywords = [
