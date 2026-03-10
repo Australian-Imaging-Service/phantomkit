@@ -19,8 +19,10 @@ from fileformats.generic import Directory, File
 from fileformats.medimage import NiftiGz
 from fileformats.medimage.diffusion import Bval, Bvec
 from fileformats.text import Csv
-from fileformats.vendor.mrtrix3.medimage.dwi import ImageFormatB as MifDwi
-from fileformats.vendor.mrtrix3.medimage.image import ImageFormat as MifImage
+from fileformats.vendor.mrtrix3.medimage import (
+    ImageFormatWithDwiEncoding as MifDwi,
+    ImageFormat as MifImage,
+)
 from pydra.compose import python, workflow
 from pydra.tasks.mrtrix3.v3_1 import (
     DwiBiascorrect_Ants as DwiBiascorrectAnts,
@@ -1171,7 +1173,7 @@ def _ComputeShellAdc(
 @python.define(outputs=["adc_map", "stats_row"])
 def _AggregateAdcMaps(
     shell_adc_files: list[NiftiGz],
-    phantom_mask: MifImage,
+    phantom_mask: NiftiGz,
     output_dir: Path,
     label: str,
 ) -> tuple[NiftiGz, dict]:
@@ -1187,8 +1189,8 @@ def _AggregateAdcMaps(
     shell_adc_files : list[NiftiGz]
         Per-shell ADC NIfTI images to average.  All must share the same voxel
         grid.
-    phantom_mask : MifImage
-        Binary phantom mask in MIF format.  Used to restrict statistics to
+    phantom_mask : NiftiGz
+        Binary phantom mask in NIfTI format.  Used to restrict statistics to
         voxels inside the phantom.
     output_dir : Path
         Directory in which the aggregated ADC map is written as
@@ -1242,7 +1244,7 @@ def _AggregateAdcMaps(
 @workflow.define(outputs=["adc_map", "stats_row"])
 def ComputeAdcMaps(
     dwi_mif: MifDwi,
-    phantom_mask: MifImage,
+    phantom_mask: NiftiGz,
     output_dir: Path,
     label: str,
     shells: list[float] = ADC_SHELLS,
