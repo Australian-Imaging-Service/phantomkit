@@ -199,10 +199,10 @@ def GeneratePlots(
     from pathlib import Path as _Path
     from phantomkit.plotting.vial_intensity import plot_vial_intensity
     from phantomkit.plotting.maps_ir import (
-        plot_vial_means_std_pub_from_nifti as plot_ir,
+        plot_vial_ir_means_std as plot_ir,
     )
     from phantomkit.plotting.maps_te import (
-        plot_vial_means_std_pub_from_nifti as plot_te,
+        plot_vial_te_means_std as plot_te,
     )
 
     metrics_path = _Path(metrics_dir)

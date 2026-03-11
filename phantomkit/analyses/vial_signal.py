@@ -45,10 +45,47 @@ logger = logging.getLogger(__name__)
 def PrepareSessionPaths(
     input_image: NiftiGz,
     output_base_dir: Path | None = None,
-) -> tuple[str, Path, Path, Path, Path, Path, Path]:
+) -> tuple[str, Directory, Directory, Directory, Directory, Directory, Path]:
     """
     Derive all session output paths from the input image location, create the
     directories, and return the path strings for use by downstream tasks.
+
+    Parameters
+    ----------
+    input_image : NiftiGz
+        Path to the primary NIfTI image for the session.  The session name is
+        taken from the parent directory of this file.
+    output_base_dir : Path, optional
+        Root output directory.  A sub-directory named after the session
+        (parent folder of *input_image*) is created automatically.
+        Defaults to the current working directory.
+
+    Returns
+    -------
+    session_name : str
+        Name of the session (parent directory of *input_image*).
+    output_dir : Directory
+        Top-level session output directory (``output_base_dir / session_name``).
+    tmp_dir : Directory
+        Temporary working directory for intermediate files.
+    vial_dir : Directory
+        Directory for vial segmentation mask NIfTI files.
+    metrics_dir : Directory
+        Directory for per-contrast vial signal metric CSV files.
+    images_template_space_dir : Directory
+        Directory for contrast images warped into template space.
+    scanner_space_image : Path
+        Destination path for the template phantom warped into scanner space.
+
+    Steps
+    -----
+    1. Resolve *output_base_dir* to the current working directory if ``None``.
+    2. Derive *session_name* from the parent directory of *input_image*.
+    3. Construct sub-directory paths for ``tmp``, ``vial_segmentations``,
+       ``metrics``, and ``images_template_space``.
+    4. Create all four sub-directories with ``mkdir(parents=True,
+       exist_ok=True)``.
+    5. Return all path components as a tuple for use by downstream tasks.
     """
     from pathlib import Path as _Path
 
@@ -78,7 +115,28 @@ def PrepareSessionPaths(
 
 @python.define
 def GetVialMasks(template_dir: Directory) -> list[NiftiGz]:
-    """Return sorted list of vial mask paths from the VialsLabelled directory."""
+    """
+    Return sorted list of vial mask NIfTI paths from the template directory.
+
+    Parameters
+    ----------
+    template_dir : Directory
+        Path to the GSP SPIRIT template directory.  Must contain a
+        ``VialsLabelled/`` sub-directory holding per-vial mask files named
+        ``*.nii.gz``.
+
+    Returns
+    -------
+    out : list[NiftiGz]
+        Sorted list of absolute paths to all ``*.nii.gz`` files found inside
+        ``template_dir/VialsLabelled/``.
+
+    Steps
+    -----
+    1. Construct the path ``template_dir / "VialsLabelled"``.
+    2. Glob for all ``*.nii.gz`` files in that directory.
+    3. Return the results sorted lexicographically by filename.
+    """
     from pathlib import Path as _Path
 
     return sorted((_Path(template_dir) / "VialsLabelled").glob("*.nii.gz"))
@@ -86,7 +144,27 @@ def GetVialMasks(template_dir: Directory) -> list[NiftiGz]:
 
 @python.define
 def GetContrastFiles(input_image: NiftiGz) -> list[NiftiGz]:
-    """Return sorted list of all NIfTI files in the same directory as input_image."""
+    """
+    Return sorted list of all NIfTI files in the same directory as the input image.
+
+    Parameters
+    ----------
+    input_image : NiftiGz
+        Path to the primary NIfTI image for the session.  All ``*.nii.gz``
+        files in its parent directory are treated as additional contrast images.
+
+    Returns
+    -------
+    out : list[NiftiGz]
+        Sorted list of absolute paths to all ``*.nii.gz`` files found in the
+        same directory as *input_image*.
+
+    Steps
+    -----
+    1. Resolve the parent directory of *input_image*.
+    2. Glob for all ``*.nii.gz`` files in that directory.
+    3. Return the results sorted lexicographically by filename.
+    """
     from pathlib import Path as _Path
 
     return sorted(_Path(input_image).parent.glob("*.nii.gz"))
@@ -105,12 +183,12 @@ def GetContrastFiles(input_image: NiftiGz) -> list[NiftiGz]:
         "scanner_space_image",
     ]
 )
-def GspSpiritAnalysis(
+def VialSignalAnalysis(
     input_image: NiftiGz,
     template_dir: Directory,
     rotation_library_file: File,
     output_base_dir: Path | None = None,
-) -> tuple[Path, Path, Path, NiftiGz]:
+) -> tuple[Directory, Directory, Directory, NiftiGz]:
     """
     Pydra workflow for processing a single GSP SPIRIT phantom MRI session.
 
@@ -137,13 +215,13 @@ def GspSpiritAnalysis(
 
     Returns
     -------
-    metrics_dir : Path
+    metrics_dir : Directory
         Directory containing per-contrast CSV files of vial signal statistics
         (mean, median, std, min, max).
-    vial_dir : Path
+    vial_dir : Directory
         Directory containing the vial mask NIfTI files warped into subject
         (scanner) space.
-    images_template_space_dir : Path
+    images_template_space_dir : Directory
         Directory containing all contrast images warped into template space.
     scanner_space_image : NiftiGz
         The template phantom image warped back into scanner space.
@@ -268,7 +346,7 @@ def GspSpiritAnalysis(
 
 
 @workflow.define(outputs=["results"])
-def GspSpiritAnalysisBatch(
+def VialSignalAnalysisBatch(
     input_images: list[NiftiGz],
     template_dir: Directory,
     output_base_dir: Path,
@@ -277,11 +355,40 @@ def GspSpiritAnalysisBatch(
     """
     Pydra workflow for batch-processing multiple phantom sessions in parallel.
 
-    Each session is processed by PhantomSessionWorkflow; the sessions are
-    split across input_images and results collected back into a list.
+    Each session is processed by :func:`VialSignalAnalysis`; the sessions are
+    split across *input_images* and results collected back into a list.
+
+    Parameters
+    ----------
+    input_images : list[NiftiGz]
+        One primary NIfTI image per session.  All NIfTI files in each image's
+        parent directory are automatically included as contrast images.
+    template_dir : Directory
+        Path to the shared GSP SPIRIT template directory, passed unchanged to
+        each :func:`VialSignalAnalysis` invocation.
+    output_base_dir : Path
+        Shared root output directory.  Each session receives its own
+        sub-directory named after its parent folder.
+    rotation_library_file : File
+        Path to the rotation library text file, passed unchanged to each
+        :func:`VialSignalAnalysis` invocation.
+
+    Returns
+    -------
+    results : list
+        List of ``metrics_dir`` outputs from each :func:`VialSignalAnalysis`
+        call, one entry per session, in the same order as *input_images*.
+
+    Steps
+    -----
+    1. **VialSignalAnalysis** — run the full single-session phantom pipeline
+       for every element of *input_images* in parallel (pydra ``split`` on
+       ``input_image``).
+    2. Collect the per-session ``metrics_dir`` outputs into a single list
+       (pydra ``combine`` on ``input_image``).
     """
     process = workflow.add(
-        GspSpiritAnalysis(
+        VialSignalAnalysis(
             input_image=input_images,
             template_dir=template_dir,
             output_base_dir=output_base_dir,

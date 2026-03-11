@@ -1,11 +1,11 @@
-"""Unit tests for phantomkit.workflow."""
+"""Unit tests for phantomkit.analyses.vial_signal."""
 
 from pathlib import Path
 
 from fileformats.generic import File
 from fileformats.medimage import NiftiGz
 
-from phantomkit.protocols.gsp_spirit import (
+from phantomkit.analyses.vial_signal import (
     GetContrastFiles,
     GetVialMasks,
     PrepareSessionPaths,
@@ -83,15 +83,15 @@ def test_get_contrast_files_excludes_non_nifti(tmp_path: Path) -> None:
 # ── Top-level workflow graph construction (no execution) ──────────────────────
 
 
-def test_gsp_spirit_build(tmp_path: Path) -> None:
-    from phantomkit.protocols.gsp_spirit import GspSpiritAnalysis
+def test_vial_signal_build(tmp_path: Path) -> None:
+    from phantomkit.analyses.vial_signal import VialSignalAnalysis
 
     image = NiftiGz.sample(dest_dir=tmp_path, stem="t1")
     template_dir = tmp_path / "template"
     template_dir.mkdir()
     rotation_lib = File.sample(dest_dir=tmp_path, stem="rotations")
 
-    wf = GspSpiritAnalysis(
+    wf = VialSignalAnalysis(
         input_image=image,
         template_dir=template_dir,
         output_base_dir=tmp_path / "output",
@@ -100,8 +100,8 @@ def test_gsp_spirit_build(tmp_path: Path) -> None:
     assert wf is not None
 
 
-def test_gsp_spirit_batch_build(tmp_path: Path) -> None:
-    from phantomkit.protocols.gsp_spirit import GspSpiritAnalysisBatch
+def test_vial_signal_batch_build(tmp_path: Path) -> None:
+    from phantomkit.analyses.vial_signal import VialSignalAnalysisBatch
 
     images = [
         NiftiGz.sample(dest_dir=tmp_path / f"session{i}", stem="t1") for i in range(2)
@@ -110,7 +110,7 @@ def test_gsp_spirit_batch_build(tmp_path: Path) -> None:
     template_dir.mkdir()
     rotation_lib = File.sample(dest_dir=tmp_path, stem="rotations")
 
-    wf = GspSpiritAnalysisBatch(
+    wf = VialSignalAnalysisBatch(
         input_images=images,
         template_dir=template_dir,
         output_base_dir=tmp_path / "output",
