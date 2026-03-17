@@ -30,6 +30,11 @@ def find_csv_file(metric_dir, contrast_name, suffix):
     """
     Find a CSV file in a directory that matches the contrast name and suffix.
 
+    Uses an exact token match: the contrast_name must appear in the filename
+    immediately followed by the suffix (no extra characters between them).
+    This prevents ambiguous substring hits such as 't2_se_TE_14' matching
+    't2_se_TE_140_mean_matrix.csv'.
+
     Args:
         metric_dir: Directory containing CSV files
         contrast_name: Base name of the contrast to search for
@@ -41,8 +46,9 @@ def find_csv_file(metric_dir, contrast_name, suffix):
     Raises:
         FileNotFoundError: If no matching file is found
     """
+    exact_tail = contrast_name + suffix
     for f in os.listdir(metric_dir):
-        if contrast_name in f and f.endswith(suffix):
+        if f.endswith(exact_tail):
             return os.path.join(metric_dir, f)
     raise FileNotFoundError(
         f"No CSV file found for contrast '{contrast_name}' with suffix '{suffix}' in {metric_dir}"
