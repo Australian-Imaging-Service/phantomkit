@@ -161,7 +161,7 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
 
         from pydra.engine import Submitter
 
-        with Submitter(plugin=plugin) as sub:
+        with Submitter(worker=plugin) as sub:
             sub(wf)
         logger.info("Done.")
 
@@ -451,9 +451,7 @@ def run_pipeline(
         nonlocal stage3_error
         try:
             if run_stage3_flag:
-                run_stage3(
-                    input_path, output_path, template_dir, scan_info, dry_run
-                )
+                run_stage3(input_path, output_path, template_dir, scan_info, dry_run)
             else:
                 _locked_header("STAGE 3 — Phantom QC on Native Contrasts")
                 print("  Skipped.\n")
@@ -461,9 +459,7 @@ def run_pipeline(
             stage3_error = exc
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        concurrent.futures.wait(
-            [executor.submit(_s1), executor.submit(_s3)]
-        )
+        concurrent.futures.wait([executor.submit(_s1), executor.submit(_s3)])
 
     if stage1_error:
         raise click.ClickException(f"Stage 1 failed: {stage1_error}")

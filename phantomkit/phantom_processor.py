@@ -24,6 +24,11 @@ Path conventions (shared repo):
     template_data/rotations.txt
 """
 
+import matplotlib
+
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
+
 import re
 import shutil
 import subprocess
@@ -68,7 +73,6 @@ class PhantomProcessor:
         # Phantom name is the last component of template_dir (e.g. "SPIRIT")
         self.phantom_name = self.template_dir.name
 
-        # Template files — shared repo uses lowercase "vials_labelled"
         self.template_phantom = self.template_dir / "ImageTemplate.nii.gz"
         self.vial_dir = self.template_dir / "vials_labelled"
         self.vial_masks = sorted(self.vial_dir.glob("*.nii.gz"))
@@ -113,13 +117,20 @@ class PhantomProcessor:
         """Run ANTs rigid registration. Returns (warped, transform, inverse_warped)."""
         cmd = [
             "antsRegistrationSyN.sh",
-            "-d", "3",
-            "-f", str(self.template_phantom),
-            "-m", input_image,
-            "-o", output_prefix,
-            "-t", "r",
-            "-n", "8",
-            "-j", "1",
+            "-d",
+            "3",
+            "-f",
+            str(self.template_phantom),
+            "-m",
+            input_image,
+            "-o",
+            output_prefix,
+            "-t",
+            "r",
+            "-n",
+            "8",
+            "-j",
+            "1",
         ]
         print("Running ANTs registration...")
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -157,15 +168,24 @@ class PhantomProcessor:
             )
 
             cmd_regrid = [
-                "mrgrid", str(vial_mask),
-                "-template", warped_image,
-                "-interp", "nearest",
+                "mrgrid",
+                str(vial_mask),
+                "-template",
+                warped_image,
+                "-interp",
+                "nearest",
                 "-quiet",
-                "regrid", "-",
+                "regrid",
+                "-",
             ]
             cmd_mean = [
-                "mrstats", "-quiet", warped_image,
-                "-output", "mean", "-mask", "-",
+                "mrstats",
+                "-quiet",
+                warped_image,
+                "-output",
+                "mean",
+                "-mask",
+                "-",
             ]
 
             proc_regrid = subprocess.Popen(
@@ -196,8 +216,13 @@ class PhantomProcessor:
 
             # Std check
             cmd_std = [
-                "mrstats", "-quiet", warped_image,
-                "-output", "std", "-mask", "-",
+                "mrstats",
+                "-quiet",
+                warped_image,
+                "-output",
+                "std",
+                "-mask",
+                "-",
             ]
             proc_regrid2 = subprocess.Popen(
                 cmd_regrid, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -289,9 +314,13 @@ class PhantomProcessor:
     ):
         """Apply rotation to an image using mrtransform."""
         cmd = [
-            "mrtransform", input_image, output_image,
-            "-linear", rotation_matrix_file,
-            "-interp", "nearest",
+            "mrtransform",
+            input_image,
+            output_image,
+            "-linear",
+            rotation_matrix_file,
+            "-interp",
+            "nearest",
             "-force",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -347,8 +376,12 @@ class PhantomProcessor:
             )
 
         return (
-            warped, transform, inverse_warped,
-            iteration, current_input, rotation_matrix_file,
+            warped,
+            transform,
+            inverse_warped,
+            iteration,
+            current_input,
+            rotation_matrix_file,
         )
 
     def _transform_vials_to_subject_space(
@@ -368,7 +401,8 @@ class PhantomProcessor:
 
         for vial_mask in self.vial_masks:
             vial_name = (
-                Path(vial_mask).name.replace(".nii.gz", "")
+                Path(vial_mask)
+                .name.replace(".nii.gz", "")
                 .replace(".nii", "")
                 .split(".")[0]
             )
@@ -379,26 +413,35 @@ class PhantomProcessor:
             # Inverse ANTs transform
             cmd = [
                 "antsApplyTransforms",
-                "-d", "3",
-                "-i", str(vial_mask),
-                "-r", reference_image,
-                "-o", tmp_vial,
-                "-t", f"[{transform_matrix}, 1]",
-                "-n", "Linear",
+                "-d",
+                "3",
+                "-i",
+                str(vial_mask),
+                "-r",
+                reference_image,
+                "-o",
+                tmp_vial,
+                "-t",
+                f"[{transform_matrix}, 1]",
+                "-n",
+                "Linear",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                raise RuntimeError(
-                    f"Transform failed for {vial_name}: {result.stderr}"
-                )
+                raise RuntimeError(f"Transform failed for {vial_name}: {result.stderr}")
 
             # Apply inverse rotation (iteration > 1) or simple copy
             if iteration > 1 and rotation_matrix_file:
                 cmd = [
-                    "mrtransform", tmp_vial, output_vial,
-                    "-linear", rotation_matrix_file,
-                    "-interp", "nearest",
-                    "-inverse", "-force",
+                    "mrtransform",
+                    tmp_vial,
+                    output_vial,
+                    "-linear",
+                    rotation_matrix_file,
+                    "-interp",
+                    "nearest",
+                    "-inverse",
+                    "-force",
                 ]
             else:
                 cmd = ["mrconvert", "-quiet", tmp_vial, output_vial, "-force"]
@@ -439,9 +482,14 @@ class PhantomProcessor:
         if iteration > 1 and rotation_matrix_file:
             rotated_contrast = str(tmp_dir / f"{contrast_name}_rotated.nii.gz")
             cmd = [
-                "mrtransform", str(contrast_file), rotated_contrast,
-                "-linear", rotation_matrix_file,
-                "-interp", "linear", "-force",
+                "mrtransform",
+                str(contrast_file),
+                rotated_contrast,
+                "-linear",
+                rotation_matrix_file,
+                "-interp",
+                "linear",
+                "-force",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -463,8 +511,14 @@ class PhantomProcessor:
         if is_single_slice:
             padded = str(tmp_dir / f"{contrast_name}_padded.nii.gz")
             cmd = [
-                "mrgrid", source_image, "pad",
-                "-axis", "2", "1,1", padded, "-force",
+                "mrgrid",
+                source_image,
+                "pad",
+                "-axis",
+                "2",
+                "1,1",
+                padded,
+                "-force",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -481,13 +535,20 @@ class PhantomProcessor:
 
         cmd = [
             "antsApplyTransforms",
-            "-d", "3",
-            "-e", "3" if is_4d else "0",
-            "-i", transform_input,
-            "-r", str(self.template_phantom),
-            "-o", warped_tmp,
-            "-t", transform_matrix,
-            "-n", "Linear",
+            "-d",
+            "3",
+            "-e",
+            "3" if is_4d else "0",
+            "-i",
+            transform_input,
+            "-r",
+            str(self.template_phantom),
+            "-o",
+            warped_tmp,
+            "-t",
+            transform_matrix,
+            "-n",
+            "Linear",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -549,9 +610,14 @@ class PhantomProcessor:
         if contrast_type == "adc":
             original_count = len(vial_masks)
             vial_masks = [
-                m for m in vial_masks
-                if Path(m).name.replace(".nii.gz", "").replace(".nii", "")
-                .split(".")[0].upper() in adc_vials
+                m
+                for m in vial_masks
+                if Path(m)
+                .name.replace(".nii.gz", "")
+                .replace(".nii", "")
+                .split(".")[0]
+                .upper()
+                in adc_vials
             ]
             print(
                 f"  [ADC mode] Restricting to vials E–L "
@@ -562,7 +628,9 @@ class PhantomProcessor:
         cmd = ["mrinfo", "-size", str(contrast_file)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         size_info = result.stdout.strip().split()
-        nvols = int(size_info[3]) if len(size_info) >= 4 and int(size_info[3]) > 0 else 1
+        nvols = (
+            int(size_info[3]) if len(size_info) >= 4 and int(size_info[3]) > 0 else 1
+        )
 
         print(
             f"  Processing {clean_contrast_name} "
@@ -570,7 +638,11 @@ class PhantomProcessor:
         )
 
         metrics_data: Dict[str, Dict[str, List[float]]] = {
-            "mean": {}, "median": {}, "std": {}, "min": {}, "max": {}
+            "mean": {},
+            "median": {},
+            "std": {},
+            "min": {},
+            "max": {},
         }
 
         tmp_vol_dir = output_metrics_dir.parent / "tmp_vols"
@@ -578,16 +650,23 @@ class PhantomProcessor:
 
         for vial_mask in vial_masks:
             vial_name = (
-                Path(vial_mask).name.replace(".nii.gz", "")
-                .replace(".nii", "").split(".")[0]
+                Path(vial_mask)
+                .name.replace(".nii.gz", "")
+                .replace(".nii", "")
+                .split(".")[0]
             )
             for metric in metrics_data:
                 metrics_data[metric][vial_name] = []
 
             regridded_mask = str(tmp_vol_dir / f"{contrast_name}_{vial_name}.nii")
             cmd = [
-                "mrgrid", "-template", str(contrast_file),
-                vial_mask, "regrid", regridded_mask, "-force",
+                "mrgrid",
+                "-template",
+                str(contrast_file),
+                vial_mask,
+                "regrid",
+                regridded_mask,
+                "-force",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
@@ -601,20 +680,33 @@ class PhantomProcessor:
                 else:
                     vol_file = str(tmp_vol_dir / f"{contrast_name}_vol{vol_idx}.nii.gz")
                     cmd = [
-                        "mrconvert", str(contrast_file),
-                        "-coord", "3", str(vol_idx),
-                        vol_file, "-quiet", "-force",
+                        "mrconvert",
+                        str(contrast_file),
+                        "-coord",
+                        "3",
+                        str(vol_idx),
+                        vol_file,
+                        "-quiet",
+                        "-force",
                     ]
                     subprocess.run(cmd, check=True, capture_output=True)
 
                 cmd = [
-                    "mrstats", "-quiet", vol_file,
-                    "-output", "mean",
-                    "-output", "median",
-                    "-output", "std",
-                    "-output", "min",
-                    "-output", "max",
-                    "-mask", regridded_mask,
+                    "mrstats",
+                    "-quiet",
+                    vol_file,
+                    "-output",
+                    "mean",
+                    "-output",
+                    "median",
+                    "-output",
+                    "std",
+                    "-output",
+                    "min",
+                    "-output",
+                    "max",
+                    "-mask",
+                    regridded_mask,
                 ]
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0 or not result.stdout.strip():
@@ -635,7 +727,10 @@ class PhantomProcessor:
                 / f"{session_name}_{contrast_name}_{metric_name}_matrix.csv"
             )
             rows = [
-                {"vial": vn, **{f"{clean_contrast_name}_vol{i}": v for i, v in enumerate(vals)}}
+                {
+                    "vial": vn,
+                    **{f"{clean_contrast_name}_vol{i}": v for i, v in enumerate(vals)},
+                }
                 for vn, vals in vial_data.items()
             ]
             pd.DataFrame(rows).to_csv(csv_file, index=False)
@@ -660,28 +755,41 @@ class PhantomProcessor:
             Use (0, 1) for FA maps and (0, 0.005) for ADC maps.
         """
         cmd = [
-            "mrview", str(contrast_file),
-            "-mode", "1",
-            "-plane", "2",
-            "-interpolation", "0",
-            "-roi.load", roi_overlay,
-            "-roi.colour", "1,0,0",
-            "-roi.opacity", "1",
-            "-comments", "0",
+            "mrview",
+            str(contrast_file),
+            "-mode",
+            "1",
+            "-plane",
+            "2",
+            "-interpolation",
+            "0",
+            "-roi.load",
+            roi_overlay,
+            "-roi.colour",
+            "1,0,0",
+            "-roi.opacity",
+            "1",
+            "-comments",
+            "0",
             "-noannotations",
             "-fullscreen",
         ]
 
         if intensity_range is not None:
-            cmd.extend(["-intensity_range",
-                        f"{intensity_range[0]},{intensity_range[1]}"])
+            cmd.extend(
+                ["-intensity_range", f"{intensity_range[0]},{intensity_range[1]}"]
+            )
 
-        cmd.extend([
-            "-capture.folder", str(Path(output_image).parent),
-            "-capture.prefix", Path(output_image).stem,
-            "-capture.grab",
-            "-exit",
-        ])
+        cmd.extend(
+            [
+                "-capture.folder",
+                str(Path(output_image).parent),
+                "-capture.prefix",
+                Path(output_image).stem,
+                "-capture.grab",
+                "-exit",
+            ]
+        )
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -709,8 +817,13 @@ class PhantomProcessor:
             vial_name = vial_mask.name.replace(".nii.gz", "").replace(".nii", "")
             regridded = str(tmp_vial_dir / f"{prefix}_{vial_name}.nii")
             cmd = [
-                "mrgrid", "-template", str(contrast_file),
-                str(vial_mask), "regrid", regridded, "-force",
+                "mrgrid",
+                "-template",
+                str(contrast_file),
+                str(vial_mask),
+                "regrid",
+                regridded,
+                "-force",
             ]
             subprocess.run(cmd, check=True, capture_output=True)
             regridded_vials.append(regridded)
@@ -721,10 +834,14 @@ class PhantomProcessor:
         cmd_cat = ["mrcat"] + regridded_vials + ["-", "-axis", "3"]
         cmd_math = ["mrmath", "-", "max", roi_overlay, "-axis", "3", "-force"]
 
-        proc_cat = subprocess.Popen(cmd_cat, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc_cat = subprocess.Popen(
+            cmd_cat, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         proc_math = subprocess.Popen(
-            cmd_math, stdin=proc_cat.stdout,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cmd_math,
+            stdin=proc_cat.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         proc_cat.stdout.close()
         proc_math.communicate()
@@ -780,15 +897,17 @@ class PhantomProcessor:
                 if roi_overlay:
                     contrast_type = self._classify_contrast(contrast_file)
                     intensity_range = (
-                        (0, 1) if contrast_type == "fa"
-                        else (0, 0.005) if contrast_type == "adc"
-                        else None
+                        (0, 1)
+                        if contrast_type == "fa"
+                        else (0, 0.005) if contrast_type == "adc" else None
                     )
                     screenshot_base = str(
                         tmp_vial_dir / f"{contrast_name}_roi_overlay.png"
                     )
                     actual_screenshot = self._generate_mrview_screenshot(
-                        contrast_file, roi_overlay, screenshot_base,
+                        contrast_file,
+                        roi_overlay,
+                        screenshot_base,
                         intensity_range=intensity_range,
                     )
                     if actual_screenshot and Path(actual_screenshot).exists():
@@ -811,9 +930,7 @@ class PhantomProcessor:
 
         # ── Parametric map plots (IR and TE) ──────────────────────────────────
         def _matches(stem: str, token: str) -> bool:
-            return bool(
-                re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower())
-            )
+            return bool(re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
 
         for contrast_type_key, plot_fn, suffix in [
             ("ir", plot_vial_ir_means_std, "ir_map_PLOTmeanstd_T1mapping.png"),
@@ -841,8 +958,10 @@ class PhantomProcessor:
             roi_image_arg = None
             if vial_masks_list:
                 overlay_file = self._build_roi_overlay(
-                    first_file, vial_masks_list,
-                    contrast_type_key, tmp_vial_dir,
+                    first_file,
+                    vial_masks_list,
+                    contrast_type_key,
+                    tmp_vial_dir,
                 )
                 if overlay_file:
                     screenshot_base = str(
@@ -861,13 +980,9 @@ class PhantomProcessor:
                     output_file=output_plot,
                     roi_image=roi_image_arg,
                 )
-                print(
-                    f"    ✓ Generated {contrast_type_key.upper()} map plot"
-                )
+                print(f"    ✓ Generated {contrast_type_key.upper()} map plot")
             except Exception as e:
-                print(
-                    f"    ✗ {contrast_type_key.upper()} map plot failed: {e}"
-                )
+                print(f"    ✗ {contrast_type_key.upper()} map plot failed: {e}")
 
     # -------------------------------------------------------------------------
     # Public entry point
@@ -912,31 +1027,43 @@ class PhantomProcessor:
         # Step 1: Registration with iterative orientation correction
         print("Step 1: Registration with orientation correction")
         (
-            warped, transform, inverse_warped,
-            iteration, rotated_input, rotation_matrix_file,
+            warped,
+            transform,
+            inverse_warped,
+            iteration,
+            rotated_input,
+            rotation_matrix_file,
         ) = self._register_with_iteration(str(input_image), session_name, tmp_dir)
 
         # Save template in scanner space
-        template_scanner_space = str(
-            output_dir / "TemplatePhantom_ScannerSpace.nii.gz"
-        )
+        template_scanner_space = str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz")
         if iteration == 1:
             cmd = [
-                "mrconvert", "-quiet", inverse_warped,
-                template_scanner_space, "-force",
+                "mrconvert",
+                "-quiet",
+                inverse_warped,
+                template_scanner_space,
+                "-force",
             ]
         else:
             cmd = [
-                "mrtransform", inverse_warped, template_scanner_space,
-                "-linear", rotation_matrix_file,
-                "-interp", "nearest", "-inverse", "-force",
+                "mrtransform",
+                inverse_warped,
+                template_scanner_space,
+                "-linear",
+                rotation_matrix_file,
+                "-interp",
+                "nearest",
+                "-inverse",
+                "-force",
             ]
         subprocess.run(cmd, check=True, capture_output=True)
         print(f"  ✓ Saved template in scanner space")
 
         # Gather all contrast images — exclude derived template scanner space file
         contrast_files = [
-            f for f in input_path.parent.glob("*.nii.gz")
+            f
+            for f in input_path.parent.glob("*.nii.gz")
             if f.name != "TemplatePhantom_ScannerSpace.nii.gz"
         ]
 
@@ -1022,9 +1149,7 @@ class PhantomProcessor:
             "metrics_dir": str(metrics_dir),
             "vial_dir": str(vial_dir),
             "images_template_space_dir": str(images_template_space_dir),
-            "space_image": str(
-                output_dir / "TemplatePhantom_ScannerSpace.nii.gz"
-            ),
+            "space_image": str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz"),
             "iteration": iteration,
             "metrics": all_metrics,
         }

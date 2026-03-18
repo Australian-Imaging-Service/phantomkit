@@ -9,12 +9,12 @@ Stages
   Stage 1  DWI processing  (phantomkit.dwi_processing)
            Runs if DWI acquisitions are found in --input-dir.
            Outputs per DWI series:
-             T1_n4_in_DWI_space.nii.gz, ADC.nii.gz, FA.nii.gz,
+             T1_in_DWI_space.nii.gz, ADC.nii.gz, FA.nii.gz,
              DWI_preproc_biascorr.mif.gz
 
   Stage 2  Phantom QC in DWI space  (phantomkit.phantom_processor)
            Runs once per DWI series produced by Stage 1.
-           Input image: T1_n4_in_DWI_space.nii.gz from Stage 1.
+           Input image: T1_in_DWI_space.nii.gz from Stage 1.
            ADC and FA files in the same folder are picked up automatically.
 
   Stage 3  Phantom QC on native contrasts  (phantomkit.phantom_processor)
@@ -50,12 +50,10 @@ package's location (``phantomkit/`` directory → ``../template_data/``).
 """
 
 import argparse
-import concurrent.futures
 import re
 import shutil
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 
@@ -200,8 +198,10 @@ def run_stage1(input_dir: Path, output_dir: Path, cfg: dict, dry_run: bool) -> l
     cmd = [
         sys.executable,
         str(DWI_SCRIPT),
-        "--scans-dir", str(input_dir),
-        "--output-dir", str(output_dir),
+        "--scans-dir",
+        str(input_dir),
+        "--output-dir",
+        str(output_dir),
     ]
 
     if cfg.get("denoise_degibbs"):
@@ -222,9 +222,10 @@ def run_stage1(input_dir: Path, output_dir: Path, cfg: dict, dry_run: bool) -> l
 
     run_cmd(cmd, "Stage 1 (DWI processing)")
 
-    _t1_names = {"T1_n4_in_DWI_space.nii.gz", "T1_n4.nii.gz"}
+    _t1_names = {"T1_in_DWI_space.nii.gz", "T1.nii.gz"}
     dwi_output_dirs = [
-        d for d in sorted(output_dir.iterdir())
+        d
+        for d in sorted(output_dir.iterdir())
         if d.is_dir() and any((d / n).exists() for n in _t1_names)
     ]
 
@@ -248,7 +249,7 @@ def run_stage2(
 ):
     """
     For each DWI output directory, run PhantomProcessor on
-    T1_n4_in_DWI_space.nii.gz (or T1_n4.nii.gz for rpe_none).
+    T1_in_DWI_space.nii.gz (or T1.nii.gz for rpe_none).
     ADC.nii.gz and FA.nii.gz in the same folder are picked up automatically.
     """
     print_header("STAGE 2 — Phantom QC in DWI Space")
@@ -261,7 +262,7 @@ def run_stage2(
         t1_in_dwi = next(
             (
                 dwi_dir / n
-                for n in ("T1_n4_in_DWI_space.nii.gz", "T1_n4.nii.gz")
+                for n in ("T1_in_DWI_space.nii.gz", "T1.nii.gz")
                 if (dwi_dir / n).exists()
             ),
             None,
@@ -278,9 +279,7 @@ def run_stage2(
             print(f"      {nii.name}")
 
         if dry_run:
-            print(
-                f"  [DRY RUN] Would run PhantomProcessor on {t1_in_dwi.name}\n"
-            )
+            print(f"  [DRY RUN] Would run PhantomProcessor on {t1_in_dwi.name}\n")
             continue
 
         from phantomkit.phantom_processor import PhantomProcessor
@@ -418,9 +417,7 @@ def validate_inputs(args):
 
     input_dir = Path(args.input_dir)
     if not input_dir.is_dir():
-        errors.append(
-            f"--input-dir does not exist or is not a directory: {input_dir}"
-        )
+        errors.append(f"--input-dir does not exist or is not a directory: {input_dir}")
 
     phantom_dir = TEMPLATE_DATA_ROOT / args.phantom
     if not phantom_dir.is_dir():
@@ -464,39 +461,54 @@ def main():
     )
 
     parser.add_argument(
-        "--input-dir", required=True,
+        "--input-dir",
+        required=True,
         help="Root directory containing acquisition subdirectories (DICOM folders).",
     )
     parser.add_argument(
-        "--output-dir", required=True,
+        "--output-dir",
+        required=True,
         help="Top-level output directory.  All results are written here.",
     )
     parser.add_argument(
-        "--phantom", required=True,
+        "--phantom",
+        required=True,
         help="Phantom name, e.g. SPIRIT.  Used to locate template_data/<phantom>/.",
     )
     parser.add_argument(
-        "--denoise-degibbs", action="store_true", default=False,
+        "--denoise-degibbs",
+        action="store_true",
+        default=False,
         help="Apply dwidenoise + mrdegibbs before preprocessing.",
     )
     parser.add_argument(
-        "--gradcheck", action="store_true", default=False,
+        "--gradcheck",
+        action="store_true",
+        default=False,
         help="Run dwigradcheck to verify gradient orientations.",
     )
     parser.add_argument(
-        "--nocleanup", action="store_true", default=False,
+        "--nocleanup",
+        action="store_true",
+        default=False,
         help="Keep DWI tmp/ intermediate directories.",
     )
     parser.add_argument(
-        "--readout-time", type=float, default=None,
+        "--readout-time",
+        type=float,
+        default=None,
         help="Override TotalReadoutTime (seconds) for dwifslpreproc.",
     )
     parser.add_argument(
-        "--eddy-options", type=str, default=None,
+        "--eddy-options",
+        type=str,
+        default=None,
         help="Override FSL eddy options string.",
     )
     parser.add_argument(
-        "--dry-run", action="store_true", default=False,
+        "--dry-run",
+        action="store_true",
+        default=False,
         help="Plan and print commands; do not execute any processing.",
     )
 
@@ -565,64 +577,35 @@ def main():
         print("  NOTE: --dry-run is active.  No processing will be performed.\n")
 
     # ── Execution ─────────────────────────────────────────────────────────────
-    # Stage 1 (DWI) and Stage 3 (native contrasts) are independent and run in
-    # parallel.  Stage 2 (phantom QC in DWI space) follows Stage 1.
-    _print_lock = threading.Lock()
+    # Stages run sequentially: 1 → 2 → 3.
+    # (Stage 1 shells out to dwifslpreproc/eddy which are already multi-threaded;
+    # Stage 3 runs ANTs which is also multi-threaded. Parallel execution of
+    # stages gives no wall-time benefit and produces interleaved output.)
 
-    def _locked_print_header(title):
-        with _print_lock:
-            print_header(title)
-
+    # Stage 1 — DWI processing
     dwi_output_dirs = []
-    stage1_error = stage3_error = None
+    if run_stage1_flag:
+        dwi_output_dirs = run_stage1(input_dir, output_dir, dwi_cfg, args.dry_run)
+    else:
+        print_header("STAGE 1 — DWI Processing")
+        print("  Skipped: no DWI acquisitions found.\n")
 
-    def _run_stage1():
-        nonlocal dwi_output_dirs, stage1_error
-        try:
-            if run_stage1_flag:
-                dwi_output_dirs[:] = run_stage1(
-                    input_dir, output_dir, dwi_cfg, args.dry_run
-                )
-            else:
-                _locked_print_header("STAGE 1 — DWI Processing")
-                with _print_lock:
-                    print("  Skipped: no DWI acquisitions found.\n")
-        except Exception as exc:
-            stage1_error = exc
-
-    def _run_stage3():
-        nonlocal stage3_error
-        try:
-            if run_stage3_flag:
-                run_stage3(input_dir, output_dir, template_dir, scan_info, args.dry_run)
-            else:
-                _locked_print_header("STAGE 3 — Phantom QC on Native Contrasts")
-                with _print_lock:
-                    if not scan_info["t1_dirs"]:
-                        print("  Skipped: no T1 directory found.\n")
-                    else:
-                        print(
-                            "  Skipped: no IR or TE series found, "
-                            "and DWI pipeline was run.\n"
-                        )
-        except Exception as exc:
-            stage3_error = exc
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(_run_stage1)
-        f3 = executor.submit(_run_stage3)
-        concurrent.futures.wait([f1, f3])
-
-    if stage1_error:
-        raise RuntimeError(f"Stage 1 failed: {stage1_error}") from stage1_error
-    if stage3_error:
-        raise RuntimeError(f"Stage 3 failed: {stage3_error}") from stage3_error
-
+    # Stage 2 — Phantom QC in DWI space (follows Stage 1)
     if run_stage1_flag:
         run_stage2(dwi_output_dirs, output_dir, template_dir, args.dry_run)
     else:
         print_header("STAGE 2 — Phantom QC in DWI Space")
         print("  Skipped: Stage 1 did not run.\n")
+
+    # Stage 3 — Phantom QC on native contrasts
+    if run_stage3_flag:
+        run_stage3(input_dir, output_dir, template_dir, scan_info, args.dry_run)
+    else:
+        print_header("STAGE 3 — Phantom QC on Native Contrasts")
+        if not scan_info["t1_dirs"]:
+            print("  Skipped: no T1 directory found.\n")
+        else:
+            print("  Skipped: no IR or TE series found, and DWI pipeline was run.\n")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print_header("Pipeline Complete")

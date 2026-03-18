@@ -16,7 +16,7 @@ Output structure:
             ADC.nii.gz
             FA.nii.gz
             DWI_preproc_biascorr.mif.gz   (or DWI_denoise_gibbs_preproc_biascorr.mif.gz)
-            T1_n4_in_DWI_space.nii.gz
+            T1_in_DWI_space.nii.gz
             tmp/                           (intermediate files — removed unless --nocleanup)
 """
 
@@ -28,7 +28,6 @@ import shutil
 import subprocess
 from pathlib import Path
 
-import pydra
 import yaml
 
 
@@ -579,8 +578,8 @@ def build_pe_assignment_map(
         pe_groups = {}  # pe_dir -> set of dwi_dirs it should serve
         for pe_dir, scores in pe_scores.items():
             max_len = max(scores.values()) if scores else 0
-            if max_len <= 10:
-                continue  # weak match, skip
+            if max_len <= 0:
+                continue  # no common prefix at all — skip
             group = {d for d, l in scores.items() if l == max_len}
             pe_groups[pe_dir] = group
 
@@ -1005,7 +1004,7 @@ def plan_workflow(
     # T1 output filename depends on whether registration was performed.
     # rpe_none: no registration, so "T1_n4_in_DWI_space" is misleading.
     t1_output_name = (
-        "T1_n4.nii.gz" if preproc_mode == "rpe_none" else "T1_n4_in_DWI_space.nii.gz"
+        "T1.nii.gz" if preproc_mode == "rpe_none" else "T1_in_DWI_space.nii.gz"
     )
 
     rpe_conv = conversions.get(rpe_dir_path) if rpe_dir_path else None
@@ -1112,8 +1111,8 @@ def print_plan(plans: list, skipped: list):
             print(
                 f"  WARNING: preproc_mode is rpe_none — B0-to-T1 co-registration "
                 f"will be SKIPPED.\n"
-                f"           The native N4-corrected T1 will be used in place of "
-                f"T1_n4_in_DWI_space.nii.gz.\n"
+                f"           The native T1 will be used in place of "
+                f"T1_in_DWI_space.nii.gz.\n"
                 f"           Consider acquiring a reverse PE image to enable "
                 f"distortion correction and accurate co-registration."
             )
@@ -1133,9 +1132,7 @@ def print_plan(plans: list, skipped: list):
 # =============================================================================
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"nii": str, "json": str, "bvec": str, "bval": str}})
-def convert_dicoms(dicom_dir: str, out_dir: str):
+def convert_dicoms(dicom_dir: str, out_dir: str) -> tuple[str, str, str, str]:
     """Convert a DICOM directory to NIfTI. Returns NIfTI + sidecar paths."""
     os.makedirs(out_dir, exist_ok=True)
     run_cmd(["dcm2niix", "-o", out_dir, "-f", "%p", "-z", "y", dicom_dir])
@@ -1152,7 +1149,6 @@ def convert_dicoms(dicom_dir: str, out_dir: str):
     )
 
 
-@pydra.mark.task
 def convert_to_mif_initial(
     nii: str, json_file: str, bvec: str, bval: str, out_path: str
 ) -> str:
@@ -1163,9 +1159,7 @@ def convert_to_mif_initial(
     return out_path
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"bvec": str, "bval": str}})
-def run_gradcheck(mif_path: str, out_dir: str, prefix: str):
+def run_gradcheck(mif_path: str, out_dir: str, prefix: str) -> tuple[str, str]:
     """Run dwigradcheck on a MIF, export corrected bvec/bval."""
     out_bvec = str(Path(out_dir) / f"{prefix}_corrected.bvec")
     out_bval = str(Path(out_dir) / f"{prefix}_corrected.bval")
@@ -1173,9 +1167,12 @@ def run_gradcheck(mif_path: str, out_dir: str, prefix: str):
     return (out_bvec, out_bval)
 
 
-@pydra.mark.task
 def convert_to_mif_final(
-    nii: str, json_file: str, bvec: str, bval: str, out_path: str
+    nii: str,
+    json_file: str,
+    bvec: str,
+    bval: str,
+    out_path: str,
 ) -> str:
     """mrconvert NIfTI -> MIF with (optionally corrected) gradients."""
     run_cmd(
@@ -1189,26 +1186,22 @@ def convert_to_mif_final(
     return out_path
 
 
-@pydra.mark.task
 def run_dwidenoise(in_mif: str, out_mif: str) -> str:
     run_cmd(["dwidenoise", in_mif, out_mif])
     return out_mif
 
 
-@pydra.mark.task
 def run_mrdegibbs(in_mif: str, out_mif: str) -> str:
     run_cmd(["mrdegibbs", in_mif, out_mif])
     return out_mif
 
 
-@pydra.mark.task
 def concatenate_ap_pa(ap_mif: str, pa_mif: str, out_mif: str) -> str:
     """Concatenate AP and PA DWI series (AP first) for rpe_all."""
     run_cmd(["dwicat", ap_mif, pa_mif, out_mif])
     return out_mif
 
 
-@pydra.mark.task
 def build_se_epi(
     dwi_mif: str,
     rpe_nii: str,
@@ -1277,7 +1270,6 @@ def build_se_epi(
     return bzero_pair
 
 
-@pydra.mark.task
 def run_dwifslpreproc(
     dwi_mif: str,
     out_mif: str,
@@ -1305,13 +1297,11 @@ def run_dwifslpreproc(
     return out_mif
 
 
-@pydra.mark.task
 def run_dwi2mask(in_mif: str, out_mif: str) -> str:
     run_cmd(["dwi2mask", in_mif, out_mif])
     return out_mif
 
 
-@pydra.mark.task
 def run_dwibiascorrect(in_mif: str, out_mif: str, mask_mif: str, bias_mif: str) -> str:
     run_cmd(
         [
@@ -1328,13 +1318,6 @@ def run_dwibiascorrect(in_mif: str, out_mif: str, mask_mif: str, bias_mif: str) 
     return out_mif
 
 
-@pydra.mark.task
-def run_n4(t1_nii: str, out_nii: str) -> str:
-    run_cmd(["N4BiasFieldCorrection", "-i", t1_nii, "-o", out_nii])
-    return out_nii
-
-
-@pydra.mark.task
 def extract_mean_b0(dwi_biascorr_mif: str, out_nii: str) -> str:
     extract = subprocess.Popen(
         ["dwiextract", dwi_biascorr_mif, "-", "-bzero"], stdout=subprocess.PIPE
@@ -1347,9 +1330,7 @@ def extract_mean_b0(dwi_biascorr_mif: str, out_nii: str) -> str:
     return out_nii
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"b02t1_mat": str}})
-def register_b0_to_t1(b0_nii: str, t1_nii: str, out_b0_in_t1: str, out_mat: str):
+def register_b0_to_t1(b0_nii: str, t1_nii: str, out_b0_in_t1: str, out_mat: str) -> str:
     run_cmd(
         [
             "flirt",
@@ -1368,11 +1349,11 @@ def register_b0_to_t1(b0_nii: str, t1_nii: str, out_b0_in_t1: str, out_mat: str)
     return out_mat
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"t1_in_dwi": str, "mrtrix_xfm": str}})
-def invert_and_apply_transform(b02t1_mat: str, t1_nii: str, b0_nii: str, tmp_dir: str):
+def invert_and_apply_transform(
+    b02t1_mat: str, t1_nii: str, b0_nii: str, tmp_dir: str
+) -> tuple[str, str]:
     t12b0_mat = str(Path(tmp_dir) / "T12b0.mat")
-    t1_in_dwi = str(Path(tmp_dir) / "T1_n4_in_DWI_space.nii.gz")
+    t1_in_dwi = str(Path(tmp_dir) / "T1_in_DWI_space.nii.gz")
     mrtrix_txt = str(Path(tmp_dir) / "struct2diff_mrtrix.txt")
     run_cmd(["convert_xfm", "-omat", t12b0_mat, "-inverse", b02t1_mat])
     run_cmd(
@@ -1393,12 +1374,10 @@ def invert_and_apply_transform(b02t1_mat: str, t1_nii: str, b0_nii: str, tmp_dir
     return (t1_in_dwi, mrtrix_txt)
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"t1_in_dwi": str}})
-def copy_t1_as_dwi_space(t1_nii: str, tmp_dir: str):
+def copy_t1_as_dwi_space(t1_nii: str, tmp_dir: str) -> str:
     """
-    rpe_none fallback: copy the N4-corrected T1 directly to
-    T1_n4_in_DWI_space.nii.gz without performing any registration.
+    rpe_none fallback: copy the T1 directly to
+    T1_in_DWI_space.nii.gz without performing any registration.
 
     B0-to-T1 co-registration is unreliable when no distortion correction
     is applied (rpe_none), so the native T1 is used as-is.  Stage 2 of the
@@ -1408,20 +1387,18 @@ def copy_t1_as_dwi_space(t1_nii: str, tmp_dir: str):
     print(
         "\n  WARNING: preproc_mode is rpe_none — B0-to-T1 co-registration has been "
         "SKIPPED.\n"
-        "  The native N4-corrected T1 will be saved as T1_n4.nii.gz.\n"
+        "  The native T1 will be saved as T1.nii.gz.\n"
         "  Vial metrics extracted from ADC/FA maps will use the T1 native space,\n"
         "  not the DWI space.  Consider acquiring a reverse PE image to enable\n"
         "  distortion correction and accurate co-registration.\n"
     )
-    t1_out = str(Path(tmp_dir) / "T1_n4.nii.gz")
+    t1_out = str(Path(tmp_dir) / "T1.nii.gz")
     shutil.copy2(t1_nii, t1_out)
     print(f"  Copied T1 (no registration): {Path(t1_out).name}")
     return t1_out
 
 
-@pydra.mark.task
-@pydra.mark.annotate({"return": {"adc": str, "fa": str}})
-def compute_tensor_metrics(dwi_biascorr_mif: str, tmp_dir: str):
+def compute_tensor_metrics(dwi_biascorr_mif: str, tmp_dir: str) -> tuple[str, str]:
     tensor_mif = str(Path(tmp_dir) / "tensor.mif.gz")
     adc_mif = str(Path(tmp_dir) / "ADC.mif.gz")
     fa_mif = str(Path(tmp_dir) / "FA.mif.gz")
@@ -1434,11 +1411,7 @@ def compute_tensor_metrics(dwi_biascorr_mif: str, tmp_dir: str):
     return (adc_nii, fa_nii)
 
 
-@pydra.mark.task
-@pydra.mark.annotate(
-    {"return": {"dwi_biascorr": str, "t1_out": str, "adc": str, "fa": str}}
-)
-def copy_final_outputs(
+def copy_final_outputs_task(
     dwi_biascorr_mif: str,
     t1_in_dwi: str,
     adc_nii: str,
@@ -1463,7 +1436,6 @@ def copy_final_outputs(
     return (dst_dwi, dst_t1, dst_adc, dst_fa)
 
 
-@pydra.mark.task
 def cleanup_tmp(sentinel: str, tmp_dir: str, keep_tmp: bool) -> str:
     """
     Remove the tmp directory after all outputs have been copied.
@@ -1484,13 +1456,36 @@ def cleanup_tmp(sentinel: str, tmp_dir: str, keep_tmp: bool) -> str:
 # =============================================================================
 
 
-def build_dwi_workflow(plan: dict) -> pydra.Workflow:
+def _exists(*paths) -> bool:
+    """Return True only if every path exists on disk."""
+    return all(Path(p).exists() for p in paths)
+
+
+def _exists(*paths) -> bool:
+    """Return True only if every path exists on disk."""
+    return all(Path(p).exists() for p in paths)
+
+
+def build_dwi_workflow(plan: dict):
     """
-    Build a Pydra workflow for a single DWI series from a pre-computed plan.
-    T1 N4 bias correction runs in parallel with the DWI chain, converging at
-    registration.
+    Execute a single DWI processing plan as sequential plain Python calls.
+
+    Checkpoint-based resumption checks out_dir (the permanent output location)
+    not tmp_dir (which is deleted on successful completion).  Five checkpoints
+    map to the expensive neuroimaging tools:
+
+      CP1  out_dir/DWI_preproc_biascorr.mif.gz + ADC.nii.gz + FA.nii.gz
+           → everything complete; skip entirely except copy + cleanup
+      CP2  tmp/DWI_preproc_biascorr.mif.gz
+           → biascorr done; skip dwi2mask + dwibiascorrect
+      CP3  tmp/DWI_preproc.mif.gz
+           → fslpreproc done; skip dwifslpreproc
+      CP4  tmp/DWI_raw_{pe_dir}.mif.gz
+           → MIF conversion done; skip DICOM conversion + mrconvert + optional
+             gradcheck + denoise/gibbs + concat
+      CP5  out_dir/T1*.nii.gz
+           → T1 handling done; skip registration / copy
     """
-    dwi_name = plan["dwi_name"]
     tmp_dir = plan["tmp_dir"]
     out_dir = plan["out_dir"]
     pe_dir = plan["pe_dir"]
@@ -1503,7 +1498,7 @@ def build_dwi_workflow(plan: dict) -> pydra.Workflow:
     keep_tmp = plan["keep_tmp"]
     dwi_preproc_name = plan["dwi_preproc_name"]
     t1_output_name = plan["t1_output_name"]
-
+    t1_dir = plan["t1_dir"]
     dwi_nii = plan["dwi_nii"]
     dwi_json = plan["dwi_json"]
     dwi_bvec = plan["dwi_bvec"]
@@ -1517,361 +1512,260 @@ def build_dwi_workflow(plan: dict) -> pydra.Workflow:
     fwd_pe_bvec = plan["fwd_pe_bvec"]
     fwd_pe_bval = plan["fwd_pe_bval"]
 
-    safe_name = sanitise_name(dwi_name)
-    wf = pydra.Workflow(name=f"dwi_{safe_name}", input_spec=["x"])
-    wf.inputs.x = 1
-
-    # ------------------------------------------------------------------
-    # T1 branch (parallel)
-    # ------------------------------------------------------------------
     t1_conv_dir = str(Path(tmp_dir) / "t1_nii")
-    wf.add(
-        convert_dicoms(
-            name="convert_t1",
-            dicom_dir=plan["t1_dir"],
-            out_dir=t1_conv_dir,
-        )
-    )
-    wf.add(
-        run_n4(
-            name="n4_t1",
-            t1_nii=wf.convert_t1.lzout.nii,
-            out_nii=str(Path(tmp_dir) / "T1_n4_biascorr.nii.gz"),
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # DWI: mrconvert to MIF (with optional gradcheck)
-    # ------------------------------------------------------------------
     dwi_raw_mif = str(Path(tmp_dir) / f"DWI_raw_{pe_dir}.mif.gz")
+    preproc_mif = str(Path(tmp_dir) / "DWI_preproc.mif.gz")
+    biascorr_mif = str(Path(tmp_dir) / dwi_preproc_name)
+    adc_tmp = str(Path(tmp_dir) / "ADC.nii.gz")
+    fa_tmp = str(Path(tmp_dir) / "FA.nii.gz")
+    t1_in_dwi = str(Path(tmp_dir) / t1_output_name)
 
-    if do_gradcheck:
-        wf.add(
-            convert_to_mif_initial(
-                name="dwi_to_mif_init",
+    # Final output paths in out_dir (survive cleanup)
+    out_dwi = str(Path(out_dir) / dwi_preproc_name)
+    out_adc = str(Path(out_dir) / "ADC.nii.gz")
+    out_fa = str(Path(out_dir) / "FA.nii.gz")
+    out_t1 = str(Path(out_dir) / t1_output_name)
+
+    # ── CP1: everything already done ─────────────────────────────────────────
+    if _exists(out_dwi, out_adc, out_fa, out_t1):
+        print(
+            f"  [skip] All outputs already exist in {Path(out_dir).name} — nothing to do."
+        )
+        return
+
+    # ── Helper: get T1 NIfTI (convert if not yet done) ───────────────────────
+    def get_t1_nii():
+        existing = (
+            list(Path(t1_conv_dir).glob("*.nii.gz"))
+            if Path(t1_conv_dir).exists()
+            else []
+        )
+        if existing:
+            return str(existing[0])
+        nii, _, _, _ = convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir)
+        return nii
+
+    # ── CP4: DWI raw MIF conversion ───────────────────────────────────────────
+    if _exists(dwi_raw_mif):
+        print(f"  [skip] DWI→MIF already done: {Path(dwi_raw_mif).name}")
+        fwd_bvec_use = fwd_pe_bvec
+        fwd_bval_use = fwd_pe_bval
+    else:
+        fwd_bvec_use = fwd_pe_bvec
+        fwd_bval_use = fwd_pe_bval
+        dwi_bvec_use = dwi_bvec
+        dwi_bval_use = dwi_bval
+        rpe_mif_out = None
+
+        # T1 DICOM conversion (fast — always safe to redo if needed)
+        get_t1_nii()
+
+        if do_gradcheck:
+            init_mif = convert_to_mif_initial(
                 nii=dwi_nii,
                 json_file=dwi_json,
                 bvec=dwi_bvec,
                 bval=dwi_bval,
                 out_path=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_init.mif.gz"),
             )
-        )
-        wf.add(
-            run_gradcheck(
-                name="gradcheck_dwi",
-                mif_path=wf.dwi_to_mif_init.lzout.out,
-                out_dir=tmp_dir,
-                prefix="dwi",
+            dwi_bvec_use, dwi_bval_use = run_gradcheck(
+                mif_path=init_mif, out_dir=tmp_dir, prefix="dwi"
             )
-        )
-        wf.add(
-            convert_to_mif_final(
-                name="dwi_to_mif",
-                nii=dwi_nii,
-                json_file=dwi_json,
-                bvec=wf.gradcheck_dwi.lzout.bvec,
-                bval=wf.gradcheck_dwi.lzout.bval,
-                out_path=dwi_raw_mif,
-            )
-        )
-
-        if preproc_mode == "rpe_all" and rpe_nii:
-            rpe_raw_mif = str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}.mif.gz")
-            wf.add(
-                convert_to_mif_initial(
-                    name="rpe_to_mif_init",
+            if preproc_mode == "rpe_all" and rpe_nii:
+                rpe_init = convert_to_mif_initial(
                     nii=rpe_nii,
                     json_file=rpe_json,
                     bvec=rpe_bvec,
                     bval=rpe_bval,
                     out_path=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}_init.mif.gz"),
                 )
-            )
-            wf.add(
-                run_gradcheck(
-                    name="gradcheck_rpe",
-                    mif_path=wf.rpe_to_mif_init.lzout.out,
-                    out_dir=tmp_dir,
-                    prefix="rpe",
+                rpe_bvec, rpe_bval = run_gradcheck(
+                    mif_path=rpe_init, out_dir=tmp_dir, prefix="rpe"
                 )
-            )
-            wf.add(
-                convert_to_mif_final(
-                    name="rpe_to_mif",
-                    nii=rpe_nii,
-                    json_file=rpe_json,
-                    bvec=wf.gradcheck_rpe.lzout.bvec,
-                    bval=wf.gradcheck_rpe.lzout.bval,
-                    out_path=rpe_raw_mif,
-                )
-            )
-            rpe_mif_out = wf.rpe_to_mif.lzout.out
-
-        elif fwd_pe_nii and preproc_mode in ("rpe_pair", "rpe_split"):
-            wf.add(
-                convert_to_mif_initial(
-                    name="fwd_to_mif_init",
+            elif fwd_pe_nii and preproc_mode in ("rpe_pair", "rpe_split"):
+                fwd_init = convert_to_mif_initial(
                     nii=fwd_pe_nii,
                     json_file=fwd_pe_json,
                     bvec=fwd_pe_bvec,
                     bval=fwd_pe_bval,
                     out_path=str(Path(tmp_dir) / f"DWI_ref_{pe_dir}_init.mif.gz"),
                 )
-            )
-            wf.add(
-                run_gradcheck(
-                    name="gradcheck_fwd",
-                    mif_path=wf.fwd_to_mif_init.lzout.out,
-                    out_dir=tmp_dir,
-                    prefix="fwd",
+                fwd_bvec_use, fwd_bval_use = run_gradcheck(
+                    mif_path=fwd_init, out_dir=tmp_dir, prefix="fwd"
                 )
-            )
-            fwd_bvec_out = wf.gradcheck_fwd.lzout.bvec
-            fwd_bval_out = wf.gradcheck_fwd.lzout.bval
-        else:
-            fwd_bvec_out = fwd_pe_bvec
-            fwd_bval_out = fwd_pe_bval
 
-        dwi_mif_out = wf.dwi_to_mif.lzout.out
-
-    else:
-        wf.add(
-            convert_to_mif_final(
-                name="dwi_to_mif",
-                nii=dwi_nii,
-                json_file=dwi_json,
-                bvec=dwi_bvec,
-                bval=dwi_bval,
-                out_path=dwi_raw_mif,
-            )
+        convert_to_mif_final(
+            nii=dwi_nii,
+            json_file=dwi_json,
+            bvec=dwi_bvec_use,
+            bval=dwi_bval_use,
+            out_path=dwi_raw_mif,
         )
-        dwi_mif_out = wf.dwi_to_mif.lzout.out
-        fwd_bvec_out = fwd_pe_bvec
-        fwd_bval_out = fwd_pe_bval
 
         if preproc_mode == "rpe_all" and rpe_nii:
-            rpe_raw_mif = str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}.mif.gz")
-            wf.add(
-                convert_to_mif_final(
-                    name="rpe_to_mif",
-                    nii=rpe_nii,
-                    json_file=rpe_json,
-                    bvec=rpe_bvec,
-                    bval=rpe_bval,
-                    out_path=rpe_raw_mif,
-                )
+            rpe_mif_out = convert_to_mif_final(
+                nii=rpe_nii,
+                json_file=rpe_json,
+                bvec=rpe_bvec,
+                bval=rpe_bval,
+                out_path=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}.mif.gz"),
             )
-            rpe_mif_out = wf.rpe_to_mif.lzout.out
 
-    # ------------------------------------------------------------------
-    # Denoise + Gibbs (applied to AP and PA separately for rpe_all)
-    # ------------------------------------------------------------------
-    if do_denoise:
-        wf.add(
-            run_dwidenoise(
-                name="denoise_dwi",
+        # Denoise + Gibbs
+        rpe_for_preproc = rpe_mif_out
+        dwi_mif_out = dwi_raw_mif
+        if do_denoise:
+            dwi_mif_out = run_dwidenoise(
                 in_mif=dwi_mif_out,
                 out_mif=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise.mif.gz"),
             )
-        )
-        wf.add(
-            run_mrdegibbs(
-                name="degibbs_dwi",
-                in_mif=wf.denoise_dwi.lzout.out,
+            dwi_mif_out = run_mrdegibbs(
+                in_mif=dwi_mif_out,
                 out_mif=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise_gibbs.mif.gz"),
             )
-        )
-        dwi_for_preproc = wf.degibbs_dwi.lzout.out
-
-        if preproc_mode == "rpe_all" and rpe_nii:
-            wf.add(
-                run_dwidenoise(
-                    name="denoise_rpe",
+            if preproc_mode == "rpe_all" and rpe_mif_out:
+                rpe_mif_out = run_dwidenoise(
                     in_mif=rpe_mif_out,
                     out_mif=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}_denoise.mif.gz"),
                 )
-            )
-            wf.add(
-                run_mrdegibbs(
-                    name="degibbs_rpe",
-                    in_mif=wf.denoise_rpe.lzout.out,
+                rpe_for_preproc = run_mrdegibbs(
+                    in_mif=rpe_mif_out,
                     out_mif=str(
                         Path(tmp_dir) / f"DWI_raw_{rpe_dir}_denoise_gibbs.mif.gz"
                     ),
                 )
-            )
-            rpe_for_preproc = wf.degibbs_rpe.lzout.out
-        elif preproc_mode == "rpe_all":
-            rpe_for_preproc = rpe_mif_out
-    else:
-        dwi_for_preproc = dwi_mif_out
-        if preproc_mode == "rpe_all" and rpe_nii:
-            rpe_for_preproc = rpe_mif_out
 
-    # ------------------------------------------------------------------
-    # Concatenate AP + PA for rpe_all
-    # ------------------------------------------------------------------
-    if preproc_mode == "rpe_all" and rpe_nii:
-        wf.add(
-            concatenate_ap_pa(
-                name="concat_ap_pa",
-                ap_mif=dwi_for_preproc,
+        # Concat AP+PA
+        if preproc_mode == "rpe_all" and rpe_for_preproc:
+            dwi_input = concatenate_ap_pa(
+                ap_mif=dwi_mif_out,
                 pa_mif=rpe_for_preproc,
                 out_mif=str(Path(tmp_dir) / "DWI_AP_PA_concat.mif.gz"),
             )
-        )
-        dwi_input_for_preproc = wf.concat_ap_pa.lzout.out
-    else:
-        dwi_input_for_preproc = dwi_for_preproc
+        else:
+            dwi_input = dwi_mif_out
 
-    # ------------------------------------------------------------------
-    # se_epi pair (rpe_pair / rpe_split only)
-    # ------------------------------------------------------------------
-    wf.add(
-        build_se_epi(
-            name="se_epi",
-            dwi_mif=dwi_for_preproc,
+        # se_epi pair
+        se_epi_path = build_se_epi(
+            dwi_mif=dwi_mif_out,
             rpe_nii=rpe_nii or "",
             rpe_json=rpe_json,
             rpe_bvec=rpe_bvec,
             rpe_bval=rpe_bval,
             fwd_pe_nii=fwd_pe_nii or "",
             fwd_pe_json=fwd_pe_json,
-            fwd_pe_bvec=fwd_bvec_out,
-            fwd_pe_bval=fwd_bval_out,
+            fwd_pe_bvec=fwd_bvec_use,
+            fwd_pe_bval=fwd_bval_use,
             pe_dir=pe_dir,
             rpe_dir=rpe_dir,
             preproc_mode=preproc_mode,
             tmp_dir=tmp_dir,
         )
-    )
 
-    # ------------------------------------------------------------------
-    # dwifslpreproc
-    # ------------------------------------------------------------------
-    wf.add(
+        # ── CP3: dwifslpreproc ────────────────────────────────────────────────
+        if not _exists(preproc_mif):
+            run_dwifslpreproc(
+                dwi_mif=dwi_input,
+                out_mif=preproc_mif,
+                pe_dir=pe_dir,
+                preproc_mode=preproc_mode,
+                se_epi=se_epi_path,
+                readout_time=readout_time,
+                eddy_options=eddy_options,
+            )
+        else:
+            print(f"  [skip] fslpreproc already done: {Path(preproc_mif).name}")
+
+    # ── CP3 (outer): fslpreproc — reached when CP4 was skipped ─────────────
+    # CP4 was skipped (DWI_raw already existed) but fslpreproc hasn't run yet.
+    # The se_epi pair must be rebuilt from the original NIfTI inputs since
+    # bzero_pair.mif.gz lives in tmp/ which was cleaned up after the prior run.
+    if not _exists(preproc_mif):
+        se_epi_path = build_se_epi(
+            dwi_mif=dwi_raw_mif,
+            rpe_nii=rpe_nii or "",
+            rpe_json=rpe_json,
+            rpe_bvec=rpe_bvec,
+            rpe_bval=rpe_bval,
+            fwd_pe_nii=fwd_pe_nii or "",
+            fwd_pe_json=fwd_pe_json,
+            fwd_pe_bvec=fwd_bvec_use,
+            fwd_pe_bval=fwd_bval_use,
+            pe_dir=pe_dir,
+            rpe_dir=rpe_dir,
+            preproc_mode=preproc_mode,
+            tmp_dir=tmp_dir,
+        )
         run_dwifslpreproc(
-            name="fslpreproc",
-            dwi_mif=dwi_input_for_preproc,
-            out_mif=str(Path(tmp_dir) / "DWI_preproc.mif.gz"),
+            dwi_mif=dwi_raw_mif,
+            out_mif=preproc_mif,
             pe_dir=pe_dir,
             preproc_mode=preproc_mode,
-            se_epi=wf.se_epi.lzout.out,
+            se_epi=se_epi_path,
             readout_time=readout_time,
             eddy_options=eddy_options,
         )
-    )
+    elif _exists(dwi_raw_mif):
+        print(f"  [skip] fslpreproc already done: {Path(preproc_mif).name}")
 
-    # ------------------------------------------------------------------
-    # Mask + DWI bias correction
-    # ------------------------------------------------------------------
-    wf.add(
-        run_dwi2mask(
-            name="dwi_mask",
-            in_mif=wf.fslpreproc.lzout.out,
-            out_mif=str(Path(tmp_dir) / "DWI_preproc_mask.mif.gz"),
+    # ── CP2: mask + bias correction ───────────────────────────────────────────
+    if _exists(biascorr_mif):
+        print(f"  [skip] bias correction already done: {Path(biascorr_mif).name}")
+    else:
+        mask_mif = run_dwi2mask(
+            in_mif=preproc_mif, out_mif=str(Path(tmp_dir) / "DWI_preproc_mask.mif.gz")
         )
-    )
-    wf.add(
         run_dwibiascorrect(
-            name="dwi_biascorr",
-            in_mif=wf.fslpreproc.lzout.out,
-            out_mif=str(Path(tmp_dir) / dwi_preproc_name),
-            mask_mif=wf.dwi_mask.lzout.out,
+            in_mif=preproc_mif,
+            out_mif=biascorr_mif,
+            mask_mif=mask_mif,
             bias_mif=str(Path(tmp_dir) / "DWI_preproc_bias.mif.gz"),
         )
-    )
 
-    # ------------------------------------------------------------------
-    # T1-to-DWI co-registration
-    #
-    # rpe_none: distortion correction was not applied, so the mean b0
-    # and T1 come from very different geometric spaces.  Co-registration
-    # in this case tends to fail or produce misleading results.  Instead
-    # the N4-corrected T1 is copied directly to T1_n4_in_DWI_space.nii.gz
-    # and a warning is printed.
-    #
-    # All other modes: extract mean b0, register to T1, invert and apply
-    # the transform to bring the T1 into DWI space.
-    # ------------------------------------------------------------------
-    if preproc_mode == "rpe_none":
-        wf.add(
-            copy_t1_as_dwi_space(
-                name="skip_registration",
-                t1_nii=wf.n4_t1.lzout.out,
-                tmp_dir=tmp_dir,
-            )
-        )
-        t1_in_dwi_out = wf.skip_registration.lzout.t1_in_dwi
+    # ── CP5: T1 handling ─────────────────────────────────────────────────────
+    if _exists(t1_in_dwi):
+        print(f"  [skip] T1 already done: {Path(t1_in_dwi).name}")
     else:
-        wf.add(
-            extract_mean_b0(
-                name="mean_b0",
-                dwi_biascorr_mif=wf.dwi_biascorr.lzout.out,
+        t1_nii = get_t1_nii()
+        if preproc_mode == "rpe_none":
+            t1_in_dwi = copy_t1_as_dwi_space(t1_nii=t1_nii, tmp_dir=tmp_dir)
+        else:
+            b0_nii = extract_mean_b0(
+                dwi_biascorr_mif=biascorr_mif,
                 out_nii=str(Path(tmp_dir) / "bzero_f.nii.gz"),
             )
-        )
-        wf.add(
-            register_b0_to_t1(
-                name="register",
-                b0_nii=wf.mean_b0.lzout.out,
-                t1_nii=wf.n4_t1.lzout.out,
+            b02t1_mat = register_b0_to_t1(
+                b0_nii=b0_nii,
+                t1_nii=t1_nii,
                 out_b0_in_t1=str(Path(tmp_dir) / "b0_to_T1.nii.gz"),
                 out_mat=str(Path(tmp_dir) / "b02T1.mat"),
             )
-        )
-        wf.add(
-            invert_and_apply_transform(
-                name="invert_xfm",
-                b02t1_mat=wf.register.lzout.b02t1_mat,
-                t1_nii=wf.n4_t1.lzout.out,
-                b0_nii=wf.mean_b0.lzout.out,
-                tmp_dir=tmp_dir,
+            t1_in_dwi, _ = invert_and_apply_transform(
+                b02t1_mat=b02t1_mat, t1_nii=t1_nii, b0_nii=b0_nii, tmp_dir=tmp_dir
             )
-        )
-        t1_in_dwi_out = wf.invert_xfm.lzout.t1_in_dwi
 
-    # ------------------------------------------------------------------
-    # Tensor metrics
-    # ------------------------------------------------------------------
-    wf.add(
-        compute_tensor_metrics(
-            name="tensor",
-            dwi_biascorr_mif=wf.dwi_biascorr.lzout.out,
-            tmp_dir=tmp_dir,
+    # ── Tensor metrics ────────────────────────────────────────────────────────
+    if _exists(adc_tmp, fa_tmp):
+        print(f"  [skip] tensor metrics already done: ADC.nii.gz, FA.nii.gz")
+        adc_nii, fa_nii = adc_tmp, fa_tmp
+    else:
+        adc_nii, fa_nii = compute_tensor_metrics(
+            dwi_biascorr_mif=biascorr_mif, tmp_dir=tmp_dir
         )
+
+    # ── Copy final outputs (always) ───────────────────────────────────────────
+    copy_final_outputs_task(
+        dwi_biascorr_mif=biascorr_mif,
+        t1_in_dwi=t1_in_dwi,
+        adc_nii=adc_nii,
+        fa_nii=fa_nii,
+        out_dir=out_dir,
+        dwi_preproc_name=dwi_preproc_name,
+        t1_output_name=t1_output_name,
     )
 
-    # ------------------------------------------------------------------
-    # Copy final outputs
-    # ------------------------------------------------------------------
-    wf.add(
-        copy_final_outputs(
-            name="copy_outputs",
-            dwi_biascorr_mif=wf.dwi_biascorr.lzout.out,
-            t1_in_dwi=t1_in_dwi_out,
-            adc_nii=wf.tensor.lzout.adc,
-            fa_nii=wf.tensor.lzout.fa,
-            out_dir=out_dir,
-            dwi_preproc_name=dwi_preproc_name,
-            t1_output_name=t1_output_name,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # Cleanup tmp (skipped if --nocleanup)
-    # ------------------------------------------------------------------
-    wf.add(
-        cleanup_tmp(
-            name="cleanup",
-            sentinel=wf.copy_outputs.lzout.dwi_biascorr,
-            tmp_dir=tmp_dir,
-            keep_tmp=keep_tmp,
-        )
-    )
-
-    wf.set_output([("outputs", wf.cleanup.lzout.out)])
-    return wf
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+    cleanup_tmp(sentinel="", tmp_dir=tmp_dir, keep_tmp=keep_tmp)
 
 
 # =============================================================================
@@ -1954,31 +1848,11 @@ def run_pipeline(cfg: dict):
     # Step 13: print plan and pause
     print_plan(plans, classified["skipped"])
 
-    # Build and run workflows
-    sub_workflows = []
     for plan in plans:
-        wf = build_dwi_workflow(plan)
-        sub_workflows.append(wf)
+        build_dwi_workflow(plan)
 
-    top = pydra.Workflow(name="dwi_pipeline", input_spec=["x"])
-    top.inputs.x = 1
-    for wf in sub_workflows:
-        top.add(wf)
-
-    top.set_output(
-        [
-            (f"out_{sanitise_name(wf.name)}", getattr(top, wf.name).lzout.outputs)
-            for wf in sub_workflows
-        ]
-    )
-
-    with pydra.Submitter(plugin="cf") as sub:
-        sub(top)
-
-    results = top.result()
     print("\n=== All done ===")
     print(f"Outputs in: {Path(output_dir).resolve()}")
-    return results
 
 
 # =============================================================================

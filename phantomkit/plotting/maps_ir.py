@@ -13,11 +13,16 @@ Key outputs:
 ================================================================================
 """
 
+import matplotlib
+
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
+
 import logging
 import os
 import re
 
-import click
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -515,36 +520,46 @@ def plot_vial_ir_means_std(
     return os.path.abspath(output_file)
 
 
-@click.command()
-@click.argument("contrast_files", nargs=-1, required=True)
-@click.option(
-    "-m",
-    "--metric_dir",
-    required=True,
-    help="Directory containing the mean/std CSV files.",
-)
-@click.option(
-    "-o",
-    "--output",
-    default="vial_summary_T1.png",
-    show_default=True,
-    help="Output filename for the plot.",
-)
-@click.option("--annotate", is_flag=True, help="Annotate each point with mean ± std.")
-@click.option(
-    "--roi_image",
-    default=None,
-    help="Path to ROI overlay PNG image for the extra subplot.",
-)
-def main(contrast_files, metric_dir, output, annotate, roi_image):
+def main():
     """Plot vial mean ± std for inversion recovery with T₁ fitting and save fit metrics."""
+    parser = argparse.ArgumentParser(
+        description="Plot T1 inversion recovery curves with curve fitting."
+    )
+    parser.add_argument(
+        "contrast_files",
+        nargs="+",
+        help="NIfTI file paths for each inversion time contrast.",
+    )
+    parser.add_argument(
+        "-m",
+        "--metric_dir",
+        required=True,
+        help="Directory containing the mean/std CSV files.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="vial_summary_T1.png",
+        help="Output filename for the plot (default: vial_summary_T1.png).",
+    )
+    parser.add_argument(
+        "--annotate",
+        action="store_true",
+        help="Annotate each point with mean ± std.",
+    )
+    parser.add_argument(
+        "--roi_image",
+        default=None,
+        help="Path to ROI overlay PNG image for the extra subplot.",
+    )
+    args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     plot_vial_ir_means_std(
-        list(contrast_files),
-        metric_dir=metric_dir,
-        output_file=output,
-        annotate=annotate,
-        roi_image=roi_image,
+        args.contrast_files,
+        metric_dir=args.metric_dir,
+        output_file=args.output,
+        annotate=args.annotate,
+        roi_image=args.roi_image,
     )
 
 

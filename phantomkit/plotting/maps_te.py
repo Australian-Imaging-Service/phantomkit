@@ -13,17 +13,18 @@ Key outputs:
 ================================================================================
 """
 
-import logging
-import os
-import re
+import matplotlib
 
-import click
-import matplotlib.pyplot as plt
-import numpy as np
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
+
 import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np
+import argparse
+import re
 from scipy.optimize import curve_fit
-
-logger = logging.getLogger(__name__)
 
 
 def find_csv_file(metric_dir, contrast_name, suffix):
@@ -109,12 +110,12 @@ def calc_r2(y_true, y_pred):
 
 
 def plot_vial_te_means_std(
-    contrast_files: list[str],
-    metric_dir: str,
-    output_file: str = "vial_summary_pub.png",
-    annotate: bool = False,
-    roi_image: str | None = None,
-) -> str:
+    contrast_files,
+    metric_dir,
+    output_file="vial_summary_pub.png",
+    annotate=False,
+    roi_image=None,
+):
     """
     Create publication-quality plots of vial intensity data with T2 curve fitting.
 
@@ -127,9 +128,6 @@ def plot_vial_te_means_std(
         output_file: Output filename for the plot (default: 'vial_summary_pub.png')
         annotate: Whether to annotate points with mean ± std (not currently used)
         roi_image: Optional path to ROI overlay image for extra subplot
-
-    Returns:
-        Absolute path to the saved plot file.
     """
 
     # ========================================================================
@@ -302,9 +300,7 @@ def plot_vial_te_means_std(
 
                 except (np.linalg.LinAlgError, ValueError) as e:
                     # Covariance matrix might be singular or ill-conditioned
-                    logger.warning(
-                        "Could not calculate 95%% CI for vial %s: %s", vial, e
-                    )
+                    print(f"[WARN] Could not calculate 95% CI for vial {vial}: {e}")
 
                 # ============================================================
                 # *** FITTED CURVE AND CI BAND PLOTTING ***
@@ -333,7 +329,7 @@ def plot_vial_te_means_std(
                 )
             except RuntimeError:
                 # Curve fitting failed for this vial
-                logger.warning("Could not fit T\u2082 for vial %s", vial)
+                print(f"[WARN] Could not fit T₂ for vial {vial}")
 
         # --------------------------------------------------------------------
         # CASE 2: Multiple vials in one subplot
@@ -501,47 +497,56 @@ def plot_vial_te_means_std(
     # ========================================================================
     plt.tight_layout(rect=[0, 0, 1, 1])
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    logger.info("Publication-ready plot saved to %s", output_file)
+    print(f"[INFO] Publication-ready plot saved to {output_file}")
 
     # Save fitted T2 values to CSV
     csv_output = os.path.splitext(output_file)[0] + "_T2_fits.csv"
     pd.DataFrame(fit_results).to_csv(csv_output, index=False)
-    logger.info("Fitted parameters saved to %s", csv_output)
+    print(f"[INFO] Fitted parameters saved to {csv_output}")
 
     plt.close(fig)
-    return os.path.abspath(output_file)
 
 
-@click.command()
-@click.argument("contrast_files", nargs=-1, required=True)
-@click.option(
-    "-m",
-    "--metric_dir",
-    required=True,
-    help="Directory containing the mean/std CSV files.",
-)
-@click.option(
-    "-o",
-    "--output",
-    default="vial_summary_pub.png",
-    show_default=True,
-    help="Output filename for the plot.",
-)
-@click.option("--annotate", is_flag=True, help="Annotate each point with mean ± std.")
-@click.option(
-    "--roi_image",
-    default=None,
-    help="Path to ROI overlay PNG image for the extra subplot.",
-)
-def main(contrast_files, metric_dir, output, annotate, roi_image):
-    """Plot grouped vial mean ± std with mono-exponential T₂ fitting and save fit metrics."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+def main():
+    """
+    Command-line interface for the T2 plotting script.
+    
+    Example usage:
+        python plot_maps_TE.py echo1.nii.gz echo2.nii.gz \
+               -m /path/to/metrics/ -o output_plot.png
+    """
+    parser = argparse.ArgumentParser(
+        description="Plot grouped vial mean ± std with mono-exponential T₂ fitting and save fit metrics."
+    )
+    parser.add_argument(
+        "contrast_files", nargs="+", help="Full paths to NIfTI contrast images."
+    )
+    parser.add_argument(
+        "-m",
+        "--metric_dir",
+        required=True,
+        help="Directory containing the mean/std CSV files.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        default="vial_summary_pub.png",
+        help="Output filename for the plot.",
+    )
+    parser.add_argument(
+        "--annotate", action="store_true", help="Annotate each point with mean ± std."
+    )
+    parser.add_argument(
+        "--roi_image", help="Path to ROI overlay PNG image for the extra subplot."
+    )
+
+    args = parser.parse_args()
     plot_vial_te_means_std(
-        list(contrast_files),
-        metric_dir=metric_dir,
-        output_file=output,
-        annotate=annotate,
-        roi_image=roi_image,
+        args.contrast_files,
+        metric_dir=args.metric_dir,
+        output_file=args.output,
+        annotate=args.annotate,
+        roi_image=args.roi_image,
     )
 
 
