@@ -200,9 +200,40 @@ def main():
     )
 
     args = parser.parse_args()
+    plot_vial_intensity(
+        csv_file=args.csv_file,
+        plot_type=args.plot_type,
+        std_csv=args.std_csv,
+        roi_image=args.roi_image,
+        annotate=args.annotate,
+        output=args.output,
+        phantom=args.phantom,
+        template_dir=args.template_dir,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def plot_vial_intensity(
+    csv_file: str,
+    plot_type: str = "scatter",
+    std_csv: str | None = None,
+    roi_image: str | None = None,
+    annotate: bool = False,
+    output: str = "vial_subplot.png",
+    phantom: str | None = None,
+    template_dir: str | None = None,
+):
+    """Plot vial vs intensity. Mode (ADC/FA/generic) auto-detected from csv_file name.
+
+    Can be called programmatically or via the CLI entry point (main()).
+    """
 
     # ---- Auto-detect contrast mode from csv_file filename ------------------
-    csv_stem = Path(args.csv_file).stem
+    csv_stem = Path(csv_file).stem
     if re.search(r"ADC", csv_stem, re.IGNORECASE):
         contrast_mode = "adc"
     elif re.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", csv_stem):
@@ -214,18 +245,18 @@ def main():
 
     # ---- Validate: ADC mode needs phantom + template_dir -------------------
     if contrast_mode == "adc":
-        if not args.phantom:
+        if not phantom:
             sys.exit(
                 "Error: --phantom is required when the csv_file name contains 'ADC'."
             )
-        if not args.template_dir:
+        if not template_dir:
             sys.exit(
                 "Error: --template_dir is required when the csv_file name contains 'ADC'."
             )
 
     # ---- Load mean CSV -----------------------------------------------------
-    sep = detect_separator(args.csv_file)
-    mean_df = pd.read_csv(args.csv_file, sep=sep)
+    sep = detect_separator(csv_file)
+    mean_df = pd.read_csv(csv_file, sep=sep)
     if mean_df.shape[1] < 2:
         sys.exit(
             "Error: mean CSV must have at least two columns (vial + at least one volume)."
@@ -237,9 +268,9 @@ def main():
 
     # ---- Load std CSV (optional) -------------------------------------------
     std_values = None
-    if args.std_csv:
-        sep_std = detect_separator(args.std_csv)
-        std_df = pd.read_csv(args.std_csv, sep=sep_std)
+    if std_csv:
+        sep_std = detect_separator(std_csv)
+        std_df = pd.read_csv(std_csv, sep=sep_std)
         if std_df.shape[1] < 2:
             sys.exit(
                 "Error: std CSV must have at least two columns (vial + at least one volume)."
@@ -258,10 +289,10 @@ def main():
     # ---- Load ADC reference (ADC mode only) --------------------------------
     ref_data = None
     if contrast_mode == "adc":
-        ref_data = load_adc_reference(args.template_dir, args.phantom)
+        ref_data = load_adc_reference(template_dir, phantom)
 
     # ---- Setup figure ------------------------------------------------------
-    ncols = 2 if args.roi_image else 1
+    ncols = 2 if roi_image else 1
     fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 6), squeeze=False)
     axes = axes[0]  # flatten row
     ax = axes[0]
@@ -301,7 +332,7 @@ def main():
             marker_kw = {}
             vol_label = f"Vol {vol_idx}"
 
-        if args.plot_type == "line":
+        if plot_type == "line":
             ax.errorbar(
                 vials,
                 means,
@@ -312,14 +343,14 @@ def main():
                 label=vol_label,
                 **marker_kw,
             )
-        elif args.plot_type == "bar":
+        elif plot_type == "bar":
             x = np.arange(len(vials)) + (vol_idx - n_vols / 2) * 0.1
             ax.bar(
                 x, means, yerr=stds, capsize=5, color=color, width=0.1, label=vol_label
             )
             ax.set_xticks(np.arange(len(vials)))
             ax.set_xticklabels(vials)
-        elif args.plot_type == "scatter":
+        elif plot_type == "scatter":
             ax.errorbar(
                 vials,
                 means,
@@ -331,7 +362,7 @@ def main():
                 **marker_kw,
             )
 
-        if args.annotate:
+        if annotate:
             for vial, mean, std in zip(
                 vials, means, stds if stds is not None else [0] * len(means)
             ):
@@ -347,7 +378,7 @@ def main():
     # ---- Axis labels -------------------------------------------------------
     ax.set_xlabel("Vial", fontsize=12)
 
-    phantom_label = f"{args.phantom} Phantom – " if args.phantom else ""
+    phantom_label = f"{phantom} Phantom – " if phantom else ""
 
     if contrast_mode == "adc":
         ax.set_ylabel("ADC ×10⁻³ mm²/s", fontsize=12)
@@ -380,7 +411,7 @@ def main():
                     [0],
                     marker="o",
                     color="crimson",
-                    linestyle="-" if args.plot_type == "line" else "None",
+                    linestyle="-" if plot_type == "line" else "None",
                     markersize=7,
                     label=f"Vol {i}",
                     alpha=0.4 + 0.6 * i / max(n_vols - 1, 1),
@@ -394,15 +425,15 @@ def main():
         ax.legend(title="Volumes", fontsize=10)
 
     # ---- ROI overlay subplot -----------------------------------------------
-    if args.roi_image:
+    if roi_image:
         ax_img = axes[1]
-        img = mpimg.imread(args.roi_image)
+        img = mpimg.imread(roi_image)
         ax_img.imshow(img)
         ax_img.axis("off")
         ax_img.set_title("Contrast with Vial ROIs")
 
     plt.tight_layout()
-    output_file = os.path.abspath(args.output)
+    output_file = os.path.abspath(output)
     plt.savefig(output_file, bbox_inches="tight", dpi=300)
     print(f"[INFO] Plot saved to: {output_file}")
     plt.close(fig)
