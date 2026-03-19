@@ -23,6 +23,7 @@ import os
 import re
 
 import argparse
+import click
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -520,46 +521,21 @@ def plot_vial_ir_means_std(
     return os.path.abspath(output_file)
 
 
-def main():
-    """Plot vial mean ± std for inversion recovery with T₁ fitting and save fit metrics."""
-    parser = argparse.ArgumentParser(
-        description="Plot T1 inversion recovery curves with curve fitting."
-    )
-    parser.add_argument(
-        "contrast_files",
-        nargs="+",
-        help="NIfTI file paths for each inversion time contrast.",
-    )
-    parser.add_argument(
-        "-m",
-        "--metric_dir",
-        required=True,
-        help="Directory containing the mean/std CSV files.",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        default="vial_summary_T1.png",
-        help="Output filename for the plot (default: vial_summary_T1.png).",
-    )
-    parser.add_argument(
-        "--annotate",
-        action="store_true",
-        help="Annotate each point with mean ± std.",
-    )
-    parser.add_argument(
-        "--roi_image",
-        default=None,
-        help="Path to ROI overlay PNG image for the extra subplot.",
-    )
-    args = parser.parse_args()
+@click.command("maps-ir")
+@click.argument("contrast_files", nargs=-1, required=True)
+@click.option("-m", "--metric-dir", required=True, help="Directory with mean/std CSVs.")
+@click.option("-o", "--output", default="vial_summary_T1.png", show_default=True)
+@click.option("--annotate", is_flag=True, default=False)
+@click.option("--roi-image", default=None)
+def main(contrast_files, metric_dir, output, annotate, roi_image):
+    """Plot vial mean ± std for inversion recovery with T1 fitting."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     plot_vial_ir_means_std(
-        args.contrast_files,
-        metric_dir=args.metric_dir,
-        output_file=args.output,
-        annotate=args.annotate,
-        roi_image=args.roi_image,
+        list(contrast_files),
+        metric_dir=metric_dir,
+        output_file=output,
+        annotate=annotate,
+        roi_image=roi_image,
     )
 
 

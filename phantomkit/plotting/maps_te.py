@@ -23,6 +23,7 @@ import matplotlib.pyplot as plt
 import os
 import numpy as np
 import argparse
+import click
 import re
 from scipy.optimize import curve_fit
 
@@ -505,48 +506,23 @@ def plot_vial_te_means_std(
     print(f"[INFO] Fitted parameters saved to {csv_output}")
 
     plt.close(fig)
+    return output_file
 
 
-def main():
-    """
-    Command-line interface for the T2 plotting script.
-    
-    Example usage:
-        python plot_maps_TE.py echo1.nii.gz echo2.nii.gz \
-               -m /path/to/metrics/ -o output_plot.png
-    """
-    parser = argparse.ArgumentParser(
-        description="Plot grouped vial mean ± std with mono-exponential T₂ fitting and save fit metrics."
-    )
-    parser.add_argument(
-        "contrast_files", nargs="+", help="Full paths to NIfTI contrast images."
-    )
-    parser.add_argument(
-        "-m",
-        "--metric_dir",
-        required=True,
-        help="Directory containing the mean/std CSV files.",
-    )
-    parser.add_argument(
-        "-o",
-        "--output",
-        default="vial_summary_pub.png",
-        help="Output filename for the plot.",
-    )
-    parser.add_argument(
-        "--annotate", action="store_true", help="Annotate each point with mean ± std."
-    )
-    parser.add_argument(
-        "--roi_image", help="Path to ROI overlay PNG image for the extra subplot."
-    )
-
-    args = parser.parse_args()
+@click.command("maps-te")
+@click.argument("contrast_files", nargs=-1, required=True)
+@click.option("-m", "--metric-dir", required=True, help="Directory with mean/std CSVs.")
+@click.option("-o", "--output", default="vial_summary_pub.png", show_default=True)
+@click.option("--annotate", is_flag=True, default=False)
+@click.option("--roi-image", default=None)
+def main(contrast_files, metric_dir, output, annotate, roi_image):
+    """Plot vial mean ± std for T2 spin-echo with mono-exponential fitting."""
     plot_vial_te_means_std(
-        args.contrast_files,
-        metric_dir=args.metric_dir,
-        output_file=args.output,
-        annotate=args.annotate,
-        roi_image=args.roi_image,
+        list(contrast_files),
+        metric_dir=metric_dir,
+        output_file=output,
+        annotate=annotate,
+        roi_image=roi_image,
     )
 
 

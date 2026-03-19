@@ -17,6 +17,7 @@ Plot mode is detected automatically from the csv_file filename:
   Generic   – all other filenames → standard intensity plot
 """
 
+import click
 import matplotlib
 
 matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
@@ -430,6 +431,32 @@ def plot_vial_intensity(
     plt.savefig(output_file, bbox_inches="tight", dpi=300)
     print(f"[INFO] Plot saved to: {output_file}")
     plt.close(fig)
+    return output_file
+
+
+@click.command("vial-intensity")
+@click.argument("csv_file")
+@click.argument("plot_type", default="scatter")
+@click.option("--std-csv", default=None)
+@click.option("--roi-image", default=None)
+@click.option("--annotate", is_flag=True, default=False)
+@click.option("--output", default="vial_subplot.png")
+@click.option("--phantom", default=None)
+@click.option("--template-dir", default=None)
+def main(
+    csv_file, plot_type, std_csv, roi_image, annotate, output, phantom, template_dir
+):
+    """Plot vial vs intensity (mean ± std) for 3D or 4D contrasts."""
+    plot_vial_intensity(
+        csv_file=csv_file,
+        plot_type=plot_type,
+        std_csv=std_csv,
+        roi_image=roi_image,
+        annotate=annotate,
+        output=output,
+        phantom=phantom,
+        template_dir=template_dir,
+    )
 
 
 if __name__ == "__main__":
