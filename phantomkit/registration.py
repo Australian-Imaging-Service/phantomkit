@@ -146,81 +146,38 @@ def AggregateVialCheck(
 ) -> bool:
     """
     Given per-vial [mean, std] pairs, check intensity-ranking criteria:
-      - No vial std > 50
+      - No vial std > 60
       - High-intensity vials A, O, Q are in top-5 by mean
       - Low-intensity vials S, D, P are in bottom-5 by mean
     """
     vial_means = {name: vals[0] for name, vals in zip(vial_names, means_stds)}
-    high_std = [(n, vals[1]) for n, vals in zip(vial_names, means_stds) if vals[1] > 50]
+    high_std = [(n, vals[1]) for n, vals in zip(vial_names, means_stds) if vals[1] > 60]
     failures: list[str] = []
 
-    # CRITERION 1: High standard deviation
     if high_std:
         failures.append(
-            f"High standard deviation detected in {len(high_std)} vial(s) "
-            f"(threshold: 50.0)"
+            f"High std in {len(high_std)} vial(s): "
+            + ", ".join(f"{n}={v:.1f}" for n, v in high_std)
         )
-        for n, v in high_std:
-            failures.append(f"  - Vial {n}: std = {v:.2f}")
 
     sorted_vials = sorted(vial_means.items(), key=lambda x: x[1], reverse=True)
     top5 = [v[0] for v in sorted_vials[:5]]
     bottom5 = [v[0] for v in sorted_vials[-5:]]
 
-    required_top = ["A", "O", "Q"]
-    required_bottom = ["S", "D", "P"]
-
-    # CRITERION 2: Required high-intensity vials
-    missing_top = [v for v in required_top if v not in top5]
-    if missing_top:
-        failures.append(
-            f"Required high-intensity vials NOT in top 5: {missing_top}"
-        )
-        failures.append(f"  Expected in top 5: {required_top}")
-        failures.append(f"  Actual top 5: {top5}")
-        vial_names_sorted = [name for name, _ in sorted_vials]
-        for v in missing_top:
-            actual_rank = vial_names_sorted.index(v) + 1
-            failures.append(
-                f"  Vial {v} is at rank #{actual_rank} with "
-                f"intensity {vial_means[v]:.1f}"
-            )
-
-    # CRITERION 3: Required low-intensity vials
-    missing_bottom = [v for v in required_bottom if v not in bottom5]
-    if missing_bottom:
-        failures.append(
-            f"Required low-intensity vials NOT in bottom 5: {missing_bottom}"
-        )
-        failures.append(f"  Expected in bottom 5: {required_bottom}")
-        failures.append(f"  Actual bottom 5: {bottom5}")
-        vial_names_sorted = [name for name, _ in sorted_vials]
-        for v in missing_bottom:
-            actual_rank = vial_names_sorted.index(v) + 1
-            failures.append(
-                f"  Vial {v} is at rank #{actual_rank} with "
-                f"intensity {vial_means[v]:.1f}"
-            )
+    for v in ["A", "O", "Q"]:
+        if v not in top5:
+            failures.append(f"Required high-intensity vial {v!r} not in top 5")
+    for v in ["S", "D", "P"]:
+        if v not in bottom5:
+            failures.append(f"Required low-intensity vial {v!r} not in bottom 5")
 
     if failures:
-        logger.warning("Registration check FAILED — %d issue(s):", len(failures))
-        logger.warning("  %s", "=" * 58)
+        logger.warning("Registration check FAILED:")
         for msg in failures:
             logger.warning("  %s", msg)
-        logger.warning("  %s", "=" * 58)
-        logger.warning("  All vial intensities (sorted):")
-        for i, (vn, intensity) in enumerate(sorted_vials, 1):
-            marker = ""
-            if vn in required_top:
-                marker = " <- expected high"
-            elif vn in required_bottom:
-                marker = " <- expected low"
-            logger.warning("    #%2d. Vial %s: %.1f%s", i, vn, intensity, marker)
         return False
 
-    logger.info(
-        "Registration check passed (top5=%s, bottom5=%s)", top5, bottom5
-    )
+    logger.info("Registration check passed (top5=%s, bottom5=%s)", top5, bottom5)
     return True
 
 

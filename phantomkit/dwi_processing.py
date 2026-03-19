@@ -1004,10 +1004,7 @@ def plan_workflow(
     )
 
     # T1 output filename depends on whether registration was performed.
-    # rpe_none: no registration, so "T1_n4_in_DWI_space" is misleading.
-    t1_output_name = (
-        "T1.nii.gz" if preproc_mode == "rpe_none" else "T1_in_DWI_space.nii.gz"
-    )
+    t1_output_name = "T1_in_DWI_space.nii.gz"
 
     rpe_conv = conversions.get(rpe_dir_path) if rpe_dir_path else None
     fwd_conv = conversions.get(fwd_pe_dir_used) if fwd_pe_dir_used else None
@@ -1111,12 +1108,10 @@ def print_plan(plans: list, skipped: list):
 
         if p["preproc_mode"] == "rpe_none":
             print(
-                f"  WARNING: preproc_mode is rpe_none — B0-to-T1 co-registration "
-                f"will be SKIPPED.\n"
-                f"           The native T1 will be used in place of "
-                f"T1_in_DWI_space.nii.gz.\n"
-                f"           Consider acquiring a reverse PE image to enable "
-                f"distortion correction and accurate co-registration."
+                f"  NOTE: preproc_mode is rpe_none — no distortion correction applied.\n"
+                f"        B0-to-T1 co-registration will still be performed, but EPI\n"
+                f"        distortion may reduce registration accuracy.\n"
+                f"        Consider acquiring a reverse PE image for optimal results."
             )
 
         for w in p["warnings"]:
@@ -1390,7 +1385,7 @@ def invert_and_apply_transform(
             "-in",
             t1_nii,
             "-ref",
-            t1_nii,
+            b0_nii,
             "-out",
             t1_in_dwi,
             "-init",
@@ -1413,14 +1408,7 @@ def copy_t1_as_dwi_space(t1_nii: str, tmp_dir: str) -> str:
     orchestrator (phantom QC in DWI space) will therefore operate on the
     native T1 geometry rather than a registered approximation.
     """
-    print(
-        "\n  WARNING: preproc_mode is rpe_none — B0-to-T1 co-registration has been "
-        "SKIPPED.\n"
-        "  The native T1 will be saved as T1.nii.gz.\n"
-        "  Vial metrics extracted from ADC/FA maps will use the T1 native space,\n"
-        "  not the DWI space.  Consider acquiring a reverse PE image to enable\n"
-        "  distortion correction and accurate co-registration.\n"
-    )
+
     t1_out = str(Path(tmp_dir) / "T1.nii.gz")
     shutil.copy2(t1_nii, t1_out)
     print(f"  Copied T1 (no registration): {Path(t1_out).name}")
@@ -1554,249 +1542,43 @@ def build_dwi_workflow(plan: dict):
         print(f"  [skip] All outputs already exist in {Path(out_dir).name}")
         return
 
+    # ── CP2: bias-corrected MIF exists in out_dir — skip DWI preprocessing ───
+    # dwifslpreproc + dwibiascorrect are by far the most expensive steps.
+    # If the bias-corrected MIF already exists in out_dir (e.g. from a prior
+    # successful run where only downstream steps failed), copy it into tmp/ so
+    # the pydra workflow can use it directly and skip straight to coregistration
+    # and tensor metrics.
+    skip_preproc = _exists(out_dwi)
+    if skip_preproc:
+        print(f"  [skip] DWI preprocessing already done: {Path(out_dwi).name}")
+        os.makedirs(tmp_dir, exist_ok=True)
+        if not _exists(biascorr_mif):
+            shutil.copy2(out_dwi, biascorr_mif)
+
     # ── Workflow class name encodes the branch combination ────────────────────
-    # Each unique combination of (preproc_mode, do_denoise, do_gradcheck) gets
-    # a distinct class name so pydra caches them independently.
+    # Each unique combination gets a distinct class name so pydra caches them
+    # independently. skip_preproc adds an extra tag to distinguish the two paths.
     dn_tag = "dn" if do_denoise else "nodn"
     gc_tag = "gc" if do_gradcheck else "nogc"
-    wf_class_name = f"DwiWf_{preproc_mode}_{dn_tag}_{gc_tag}"
+    sp_tag = "skippreproc" if skip_preproc else "fullpreproc"
+    wf_class_name = f"DwiWf_{preproc_mode}_{dn_tag}_{gc_tag}_{sp_tag}"
 
-    # ── Define the workflow ───────────────────────────────────────────────────
-    @workflow.define(outputs=["result"])
-    def DwiWf(x: int) -> str:
+    if skip_preproc:
+        # ── Reduced workflow: T1 conversion + registration + tensor + copy ───
+        # biascorr_mif is already in tmp/ (copied from out_dir above).
+        @workflow.define(outputs=["result"])
+        def DwiWf(x: int) -> str:
 
-        # ── T1 DICOM conversion ───────────────────────────────────────────────
-        conv_t1 = workflow.add(
-            convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir),
-            name="convert_t1",
-        )
-        # conv_t1.sentinel is a true lazy output — used to gate DWI chain
-
-        # ── DWI → MIF (optional gradcheck) ───────────────────────────────────
-        if do_gradcheck:
-            mif_init = workflow.add(
-                convert_to_mif_initial(
-                    nii=dwi_nii,
-                    json_file=dwi_json,
-                    bvec=dwi_bvec,
-                    bval=dwi_bval,
-                    out_path=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_init.mif.gz"),
-                ),
-                name="dwi_to_mif_init",
+            # T1 DICOM conversion (always needed for registration)
+            conv_t1 = workflow.add(
+                convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir),
+                name="convert_t1",
             )
-            gc_dwi = workflow.add(
-                run_gradcheck(mif_path=mif_init.out, out_dir=tmp_dir, prefix="dwi"),
-                name="gradcheck_dwi",
-            )
-            dwi_bvec_lazy = gc_dwi.bvec
-            dwi_bval_lazy = gc_dwi.bval
 
-            if preproc_mode == "rpe_all" and rpe_nii:
-                rpe_init = workflow.add(
-                    convert_to_mif_initial(
-                        nii=rpe_nii,
-                        json_file=rpe_json,
-                        bvec=rpe_bvec,
-                        bval=rpe_bval,
-                        out_path=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}_init.mif.gz"),
-                    ),
-                    name="rpe_to_mif_init",
-                )
-                gc_rpe = workflow.add(
-                    run_gradcheck(mif_path=rpe_init.out, out_dir=tmp_dir, prefix="rpe"),
-                    name="gradcheck_rpe",
-                )
-                rpe_bvec_lazy = gc_rpe.bvec
-                rpe_bval_lazy = gc_rpe.bval
-            else:
-                rpe_bvec_lazy = rpe_bvec
-                rpe_bval_lazy = rpe_bval
-
-            if fwd_pe_nii and preproc_mode in ("rpe_pair", "rpe_split"):
-                fwd_init = workflow.add(
-                    convert_to_mif_initial(
-                        nii=fwd_pe_nii,
-                        json_file=fwd_pe_json,
-                        bvec=fwd_pe_bvec,
-                        bval=fwd_pe_bval,
-                        out_path=str(Path(tmp_dir) / f"DWI_ref_{pe_dir}_init.mif.gz"),
-                    ),
-                    name="fwd_to_mif_init",
-                )
-                gc_fwd = workflow.add(
-                    run_gradcheck(mif_path=fwd_init.out, out_dir=tmp_dir, prefix="fwd"),
-                    name="gradcheck_fwd",
-                )
-                fwd_bvec_lazy = gc_fwd.bvec
-                fwd_bval_lazy = gc_fwd.bval
-            else:
-                fwd_bvec_lazy = fwd_pe_bvec
-                fwd_bval_lazy = fwd_pe_bval
-        else:
-            dwi_bvec_lazy = dwi_bvec
-            dwi_bval_lazy = dwi_bval
-            rpe_bvec_lazy = rpe_bvec
-            rpe_bval_lazy = rpe_bval
-            fwd_bvec_lazy = fwd_pe_bvec
-            fwd_bval_lazy = fwd_pe_bval
-
-        # convert_to_mif_final receives conv_t1.sentinel to enforce T1
-        # conversion completes before DWI chain starts
-        dwi_mif = workflow.add(
-            convert_to_mif_final(
-                nii=dwi_nii,
-                json_file=dwi_json,
-                bvec=dwi_bvec_lazy,
-                bval=dwi_bval_lazy,
-                out_path=dwi_raw_mif,
-                sentinel=conv_t1.sentinel,
-            ),
-            name="dwi_to_mif",
-        )
-
-        if preproc_mode == "rpe_all" and rpe_nii:
-            rpe_mif = workflow.add(
-                convert_to_mif_final(
-                    nii=rpe_nii,
-                    json_file=rpe_json,
-                    bvec=rpe_bvec_lazy,
-                    bval=rpe_bval_lazy,
-                    out_path=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}.mif.gz"),
-                    sentinel=conv_t1.sentinel,
-                ),
-                name="rpe_to_mif",
-            )
-            rpe_mif_out = rpe_mif.out
-        else:
-            rpe_mif_out = None
-
-        # ── Denoise + Gibbs ───────────────────────────────────────────────────
-        if do_denoise:
-            dn_dwi = workflow.add(
-                run_dwidenoise(
-                    in_mif=dwi_mif.out,
-                    out_mif=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise.mif.gz"),
-                ),
-                name="denoise_dwi",
-            )
-            dg_dwi = workflow.add(
-                run_mrdegibbs(
-                    in_mif=dn_dwi.out,
-                    out_mif=str(
-                        Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise_gibbs.mif.gz"
-                    ),
-                ),
-                name="degibbs_dwi",
-            )
-            dwi_for_preproc = dg_dwi.out
-
-            if preproc_mode == "rpe_all" and rpe_nii:
-                dn_rpe = workflow.add(
-                    run_dwidenoise(
-                        in_mif=rpe_mif_out,
-                        out_mif=str(
-                            Path(tmp_dir) / f"DWI_raw_{rpe_dir}_denoise.mif.gz"
-                        ),
-                    ),
-                    name="denoise_rpe",
-                )
-                dg_rpe = workflow.add(
-                    run_mrdegibbs(
-                        in_mif=dn_rpe.out,
-                        out_mif=str(
-                            Path(tmp_dir) / f"DWI_raw_{rpe_dir}_denoise_gibbs.mif.gz"
-                        ),
-                    ),
-                    name="degibbs_rpe",
-                )
-                rpe_for_preproc = dg_rpe.out
-            else:
-                rpe_for_preproc = rpe_mif_out
-        else:
-            dwi_for_preproc = dwi_mif.out
-            rpe_for_preproc = rpe_mif_out
-
-        # ── Concatenate AP+PA for rpe_all ─────────────────────────────────────
-        if preproc_mode == "rpe_all" and rpe_nii:
-            cat = workflow.add(
-                concatenate_ap_pa(
-                    ap_mif=dwi_for_preproc,
-                    pa_mif=rpe_for_preproc,
-                    out_mif=str(Path(tmp_dir) / "DWI_AP_PA_concat.mif.gz"),
-                ),
-                name="concat_ap_pa",
-            )
-            dwi_input = cat.out
-        else:
-            dwi_input = dwi_for_preproc
-
-        # ── se_epi pair (rpe_pair / rpe_split) ───────────────────────────────
-        se = workflow.add(
-            build_se_epi(
-                dwi_mif=dwi_for_preproc,
-                rpe_nii=rpe_nii or "",
-                rpe_json=rpe_json,
-                rpe_bvec=rpe_bvec_lazy,
-                rpe_bval=rpe_bval_lazy,
-                fwd_pe_nii=fwd_pe_nii or "",
-                fwd_pe_json=fwd_pe_json,
-                fwd_pe_bvec=fwd_bvec_lazy,
-                fwd_pe_bval=fwd_bval_lazy,
-                pe_dir=pe_dir,
-                rpe_dir=rpe_dir,
-                preproc_mode=preproc_mode,
-                tmp_dir=tmp_dir,
-            ),
-            name="se_epi",
-        )
-
-        # ── dwifslpreproc ─────────────────────────────────────────────────────
-        fslpreproc = workflow.add(
-            run_dwifslpreproc(
-                dwi_mif=dwi_input,
-                out_mif=preproc_mif,
-                pe_dir=pe_dir,
-                preproc_mode=preproc_mode,
-                se_epi=se.out,
-                readout_time=readout_time,
-                eddy_options=eddy_options,
-                scratch_dir=str(Path(tmp_dir) / "dwifslpreproc_scratch"),
-            ),
-            name="fslpreproc",
-        )
-
-        # ── Mask + DWI bias correction ────────────────────────────────────────
-        dwi_mask = workflow.add(
-            run_dwi2mask(
-                in_mif=fslpreproc.out,
-                out_mif=str(Path(tmp_dir) / "DWI_preproc_mask.mif.gz"),
-            ),
-            name="dwi_mask",
-        )
-        biascorr = workflow.add(
-            run_dwibiascorrect(
-                in_mif=fslpreproc.out,
-                out_mif=biascorr_mif,
-                mask_mif=dwi_mask.out,
-                bias_mif=str(Path(tmp_dir) / "DWI_preproc_bias.mif.gz"),
-            ),
-            name="dwi_biascorr",
-        )
-
-        # ── T1-to-DWI registration ────────────────────────────────────────────
-        if preproc_mode == "rpe_none":
-            reg = workflow.add(
-                copy_t1_as_dwi_space(
-                    t1_nii=conv_t1.nii,
-                    tmp_dir=tmp_dir,
-                ),
-                name="skip_reg",
-            )
-            t1_result = reg.out
-        else:
+            # ── T1-to-DWI registration ────────────────────────────────────────
             b0 = workflow.add(
                 extract_mean_b0(
-                    dwi_biascorr_mif=biascorr.out,
+                    dwi_biascorr_mif=biascorr_mif,
                     out_nii=str(Path(tmp_dir) / "bzero_f.nii.gz"),
                 ),
                 name="mean_b0",
@@ -1821,29 +1603,313 @@ def build_dwi_workflow(plan: dict):
             )
             t1_result = xfm.t1_in_dwi
 
-        # ── Tensor metrics ────────────────────────────────────────────────────
-        tensor = workflow.add(
-            compute_tensor_metrics(
-                dwi_biascorr_mif=biascorr.out,
-                tmp_dir=tmp_dir,
-            ),
-            name="tensor",
-        )
+            # ── Tensor metrics ────────────────────────────────────────────────
+            tensor = workflow.add(
+                compute_tensor_metrics(
+                    dwi_biascorr_mif=biascorr_mif,
+                    tmp_dir=tmp_dir,
+                ),
+                name="tensor",
+            )
 
-        # ── Copy final outputs ────────────────────────────────────────────────
-        copy = workflow.add(
-            copy_final_outputs_task(
-                dwi_biascorr_mif=biascorr.out,
-                t1_in_dwi=t1_result,
-                adc_nii=tensor.adc,
-                fa_nii=tensor.fa,
-                out_dir=out_dir,
-                dwi_preproc_name=dwi_preproc_name,
-                t1_output_name=t1_output_name,
-            ),
-            name="copy_outputs",
-        )
-        return copy.out
+            # ── Copy final outputs ────────────────────────────────────────────
+            copy = workflow.add(
+                copy_final_outputs_task(
+                    dwi_biascorr_mif=biascorr_mif,
+                    t1_in_dwi=t1_result,
+                    adc_nii=tensor.adc,
+                    fa_nii=tensor.fa,
+                    out_dir=out_dir,
+                    dwi_preproc_name=dwi_preproc_name,
+                    t1_output_name=t1_output_name,
+                ),
+                name="copy_outputs",
+            )
+            return copy.out
+
+    else:
+        # ── Full workflow: all stages ─────────────────────────────────────────
+        @workflow.define(outputs=["result"])
+        def DwiWf(x: int) -> str:
+
+            # ── T1 DICOM conversion ───────────────────────────────────────────
+            # Always run — needed for registration regardless of skip_preproc.
+            conv_t1 = workflow.add(
+                convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir),
+                name="convert_t1",
+            )
+            # conv_t1.sentinel is a true lazy output — used to gate DWI chain
+
+            # ── DWI → MIF (with optional gradcheck) ──────────────────────────
+            if do_gradcheck:
+                mif_init = workflow.add(
+                    convert_to_mif_initial(
+                        nii=dwi_nii,
+                        json_file=dwi_json,
+                        bvec=dwi_bvec,
+                        bval=dwi_bval,
+                        out_path=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_init.mif.gz"),
+                    ),
+                    name="dwi_to_mif_init",
+                )
+                gc_dwi = workflow.add(
+                    run_gradcheck(mif_path=mif_init.out, out_dir=tmp_dir, prefix="dwi"),
+                    name="gradcheck_dwi",
+                )
+                dwi_bvec_lazy = gc_dwi.bvec
+                dwi_bval_lazy = gc_dwi.bval
+
+                if preproc_mode == "rpe_all" and rpe_nii:
+                    rpe_init = workflow.add(
+                        convert_to_mif_initial(
+                            nii=rpe_nii,
+                            json_file=rpe_json,
+                            bvec=rpe_bvec,
+                            bval=rpe_bval,
+                            out_path=str(
+                                Path(tmp_dir) / f"DWI_raw_{rpe_dir}_init.mif.gz"
+                            ),
+                        ),
+                        name="rpe_to_mif_init",
+                    )
+                    gc_rpe = workflow.add(
+                        run_gradcheck(
+                            mif_path=rpe_init.out, out_dir=tmp_dir, prefix="rpe"
+                        ),
+                        name="gradcheck_rpe",
+                    )
+                    rpe_bvec_lazy = gc_rpe.bvec
+                    rpe_bval_lazy = gc_rpe.bval
+                else:
+                    rpe_bvec_lazy = rpe_bvec
+                    rpe_bval_lazy = rpe_bval
+
+                if fwd_pe_nii and preproc_mode in ("rpe_pair", "rpe_split"):
+                    fwd_init = workflow.add(
+                        convert_to_mif_initial(
+                            nii=fwd_pe_nii,
+                            json_file=fwd_pe_json,
+                            bvec=fwd_pe_bvec,
+                            bval=fwd_pe_bval,
+                            out_path=str(
+                                Path(tmp_dir) / f"DWI_ref_{pe_dir}_init.mif.gz"
+                            ),
+                        ),
+                        name="fwd_to_mif_init",
+                    )
+                    gc_fwd = workflow.add(
+                        run_gradcheck(
+                            mif_path=fwd_init.out, out_dir=tmp_dir, prefix="fwd"
+                        ),
+                        name="gradcheck_fwd",
+                    )
+                    fwd_bvec_lazy = gc_fwd.bvec
+                    fwd_bval_lazy = gc_fwd.bval
+                else:
+                    fwd_bvec_lazy = fwd_pe_bvec
+                    fwd_bval_lazy = fwd_pe_bval
+            else:
+                dwi_bvec_lazy = dwi_bvec
+                dwi_bval_lazy = dwi_bval
+                rpe_bvec_lazy = rpe_bvec
+                rpe_bval_lazy = rpe_bval
+                fwd_bvec_lazy = fwd_pe_bvec
+                fwd_bval_lazy = fwd_pe_bval
+
+            dwi_mif = workflow.add(
+                convert_to_mif_final(
+                    nii=dwi_nii,
+                    json_file=dwi_json,
+                    bvec=dwi_bvec_lazy,
+                    bval=dwi_bval_lazy,
+                    out_path=dwi_raw_mif,
+                    sentinel=conv_t1.sentinel,
+                ),
+                name="dwi_to_mif",
+            )
+
+            if preproc_mode == "rpe_all" and rpe_nii:
+                rpe_mif = workflow.add(
+                    convert_to_mif_final(
+                        nii=rpe_nii,
+                        json_file=rpe_json,
+                        bvec=rpe_bvec_lazy,
+                        bval=rpe_bval_lazy,
+                        out_path=str(Path(tmp_dir) / f"DWI_raw_{rpe_dir}.mif.gz"),
+                        sentinel=conv_t1.sentinel,
+                    ),
+                    name="rpe_to_mif",
+                )
+                rpe_mif_out = rpe_mif.out
+            else:
+                rpe_mif_out = None
+
+            # ── Denoise + Gibbs ───────────────────────────────────────────────
+            if do_denoise:
+                dn_dwi = workflow.add(
+                    run_dwidenoise(
+                        in_mif=dwi_mif.out,
+                        out_mif=str(Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise.mif.gz"),
+                    ),
+                    name="denoise_dwi",
+                )
+                dg_dwi = workflow.add(
+                    run_mrdegibbs(
+                        in_mif=dn_dwi.out,
+                        out_mif=str(
+                            Path(tmp_dir) / f"DWI_raw_{pe_dir}_denoise_gibbs.mif.gz"
+                        ),
+                    ),
+                    name="degibbs_dwi",
+                )
+                dwi_for_preproc = dg_dwi.out
+
+                if preproc_mode == "rpe_all" and rpe_nii:
+                    dn_rpe = workflow.add(
+                        run_dwidenoise(
+                            in_mif=rpe_mif_out,
+                            out_mif=str(
+                                Path(tmp_dir) / f"DWI_raw_{rpe_dir}_denoise.mif.gz"
+                            ),
+                        ),
+                        name="denoise_rpe",
+                    )
+                    dg_rpe = workflow.add(
+                        run_mrdegibbs(
+                            in_mif=dn_rpe.out,
+                            out_mif=str(
+                                Path(tmp_dir)
+                                / f"DWI_raw_{rpe_dir}_denoise_gibbs.mif.gz"
+                            ),
+                        ),
+                        name="degibbs_rpe",
+                    )
+                    rpe_for_preproc = dg_rpe.out
+                else:
+                    rpe_for_preproc = rpe_mif_out
+            else:
+                dwi_for_preproc = dwi_mif.out
+                rpe_for_preproc = rpe_mif_out
+
+            # ── Concatenate AP+PA for rpe_all ─────────────────────────────────
+            if preproc_mode == "rpe_all" and rpe_nii:
+                cat = workflow.add(
+                    concatenate_ap_pa(
+                        ap_mif=dwi_for_preproc,
+                        pa_mif=rpe_for_preproc,
+                        out_mif=str(Path(tmp_dir) / "DWI_AP_PA_concat.mif.gz"),
+                    ),
+                    name="concat_ap_pa",
+                )
+                dwi_input = cat.out
+            else:
+                dwi_input = dwi_for_preproc
+
+            # ── se_epi pair (rpe_pair / rpe_split) ───────────────────────────
+            se = workflow.add(
+                build_se_epi(
+                    dwi_mif=dwi_for_preproc,
+                    rpe_nii=rpe_nii or "",
+                    rpe_json=rpe_json,
+                    rpe_bvec=rpe_bvec_lazy,
+                    rpe_bval=rpe_bval_lazy,
+                    fwd_pe_nii=fwd_pe_nii or "",
+                    fwd_pe_json=fwd_pe_json,
+                    fwd_pe_bvec=fwd_bvec_lazy,
+                    fwd_pe_bval=fwd_bval_lazy,
+                    pe_dir=pe_dir,
+                    rpe_dir=rpe_dir,
+                    preproc_mode=preproc_mode,
+                    tmp_dir=tmp_dir,
+                ),
+                name="se_epi",
+            )
+
+            # ── dwifslpreproc ─────────────────────────────────────────────────
+            fslpreproc = workflow.add(
+                run_dwifslpreproc(
+                    dwi_mif=dwi_input,
+                    out_mif=preproc_mif,
+                    pe_dir=pe_dir,
+                    preproc_mode=preproc_mode,
+                    se_epi=se.out,
+                    readout_time=readout_time,
+                    eddy_options=eddy_options,
+                    scratch_dir=str(Path(tmp_dir) / "dwifslpreproc_scratch"),
+                ),
+                name="fslpreproc",
+            )
+
+            # ── Mask + DWI bias correction ────────────────────────────────────
+            dwi_mask = workflow.add(
+                run_dwi2mask(
+                    in_mif=fslpreproc.out,
+                    out_mif=str(Path(tmp_dir) / "DWI_preproc_mask.mif.gz"),
+                ),
+                name="dwi_mask",
+            )
+            biascorr = workflow.add(
+                run_dwibiascorrect(
+                    in_mif=fslpreproc.out,
+                    out_mif=biascorr_mif,
+                    mask_mif=dwi_mask.out,
+                    bias_mif=str(Path(tmp_dir) / "DWI_preproc_bias.mif.gz"),
+                ),
+                name="dwi_biascorr",
+            )
+            biascorr_out = biascorr.out
+
+            # ── T1-to-DWI registration ────────────────────────────────────────
+            b0 = workflow.add(
+                extract_mean_b0(
+                    dwi_biascorr_mif=biascorr_out,
+                    out_nii=str(Path(tmp_dir) / "bzero_f.nii.gz"),
+                ),
+                name="mean_b0",
+            )
+            flirt = workflow.add(
+                register_b0_to_t1(
+                    b0_nii=b0.out,
+                    t1_nii=conv_t1.nii,
+                    out_b0_in_t1=str(Path(tmp_dir) / "b0_to_T1.nii.gz"),
+                    out_mat=str(Path(tmp_dir) / "b02T1.mat"),
+                ),
+                name="register",
+            )
+            xfm = workflow.add(
+                invert_and_apply_transform(
+                    b02t1_mat=flirt.out,
+                    t1_nii=conv_t1.nii,
+                    b0_nii=b0.out,
+                    tmp_dir=tmp_dir,
+                ),
+                name="invert_xfm",
+            )
+            t1_result = xfm.t1_in_dwi
+
+            # ── Tensor metrics ────────────────────────────────────────────────
+            tensor = workflow.add(
+                compute_tensor_metrics(
+                    dwi_biascorr_mif=biascorr_out,
+                    tmp_dir=tmp_dir,
+                ),
+                name="tensor",
+            )
+
+            # ── Copy final outputs ────────────────────────────────────────────
+            copy = workflow.add(
+                copy_final_outputs_task(
+                    dwi_biascorr_mif=biascorr_out,
+                    t1_in_dwi=t1_result,
+                    adc_nii=tensor.adc,
+                    fa_nii=tensor.fa,
+                    out_dir=out_dir,
+                    dwi_preproc_name=dwi_preproc_name,
+                    t1_output_name=t1_output_name,
+                ),
+                name="copy_outputs",
+            )
+            return copy.out
 
     # Rename the class so pydra treats each branch combination as a distinct type
     DwiWf.__name__ = wf_class_name

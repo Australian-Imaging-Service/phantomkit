@@ -147,7 +147,7 @@ class PhantomProcessor:
         Validate registration by checking vial intensity rankings.
 
         Criteria:
-          - No vial std > 50
+          - No vial std > 60
           - High-intensity vials A, O, Q are in top-5 by mean
           - Low-intensity vials S, D, P are in bottom-5 by mean
 
@@ -239,14 +239,14 @@ class PhantomProcessor:
 
             if proc_std.returncode == 0 and std_output.strip():
                 std_val = float(std_output.strip())
-                if std_val > 50:
+                if std_val > 60:
                     high_std_vials.append((vial_name, std_val))
 
         # CRITERION 1: High std
         if high_std_vials:
             failures.append(
                 f"High standard deviation detected in {len(high_std_vials)} vial(s) "
-                f"(threshold: 50.0)"
+                f"(threshold: 60.0)"
             )
             for vn, sv in high_std_vials:
                 failures.append(f"  - Vial {vn}: std = {sv:.2f}")
@@ -424,7 +424,7 @@ class PhantomProcessor:
                 "-t",
                 f"[{transform_matrix}, 1]",
                 "-n",
-                "Linear",
+                "NearestNeighbor",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:

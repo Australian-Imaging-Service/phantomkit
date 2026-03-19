@@ -76,38 +76,28 @@ def load_adc_reference(template_dir: str, phantom: str) -> dict:
 
 def overlay_adc_reference(ax: plt.Axes, ref_data: dict):
     """
-    Draw per-vial ±5% and ±10% tolerance markers plus reference ADC crosshairs
-    onto *ax*.  Values are converted to ×10⁻³ for display.
+    Draw per-vial reference ADC values as open circles onto *ax*.
+    Values are converted to ×10⁻³ for display.
 
-    Tolerance is shown as vertical error bars centred on each reference value:
-      - Outer bar: ±10% of the reference value
-      - Inner bar: ±5% of the reference value
-    The bar extents are computed directly from the reference values so they
-    accurately reflect the tolerance range for each vial.
+    Open circles (no fill) are drawn after the measured scatter so both
+    are visible when they coincide.
     """
     vials = ref_data["vials"]
     ref_vals = np.array([ref_data["adc_mm2_per_s"][v] for v in vials])
     x = np.arange(len(vials))
     ref_display = ref_vals * 1e3  # convert to ×10⁻³ for display
 
-    err_10 = ref_display * 0.10  # ±10% extent
-
-    # ±10% tolerance bar
-    ax.errorbar(
+    # Open circle — no fill, steelblue edge, 1.5× the measured markersize (7→10.5)
+    ax.scatter(
         x,
         ref_display,
-        yerr=err_10,
-        fmt="none",
-        capsize=8,
-        capthick=1.5,
-        elinewidth=1.5,
-        ecolor="steelblue",
-        alpha=0.5,
-        zorder=2,
+        marker="o",
+        s=110,  # approx 10.5² ≈ 110
+        facecolors="none",
+        edgecolors="steelblue",
+        linewidths=1.5,
+        zorder=6,
     )
-
-    # Filled circle at reference value
-    ax.scatter(x, ref_display, marker="o", s=60, color="steelblue", zorder=4)
 
 
 def build_adc_legend(has_measured: bool) -> list:
@@ -116,10 +106,12 @@ def build_adc_legend(has_measured: bool) -> list:
         [0],
         [0],
         marker="o",
-        color="steelblue",
+        color="none",
+        markeredgecolor="steelblue",
+        markeredgewidth=1.5,
         linestyle="None",
-        markersize=7,
-        label="Reference ADC ±10%",
+        markersize=10,
+        label="Reference ADC",
     )
     handles = [ref_handle]
     if has_measured:
@@ -297,10 +289,6 @@ def plot_vial_intensity(
     axes = axes[0]  # flatten row
     ax = axes[0]
 
-    # ---- ADC reference bands (drawn first, behind data) -------------------
-    if ref_data is not None:
-        overlay_adc_reference(ax, ref_data)
-
     # ---- In ADC mode, scale measured values to ×10⁻³ for display ----------
     # The CSV is expected to contain raw ADC values in mm²/s; we convert here.
     display_values = mean_values * 1e3 if contrast_mode == "adc" else mean_values
@@ -374,6 +362,11 @@ def plot_vial_intensity(
                     fontsize=8,
                     color=color,
                 )
+
+    # ---- ADC reference overlay (drawn after measured values so crosshairs
+    #      are visible even when they coincide with measured data) -----------
+    if ref_data is not None:
+        overlay_adc_reference(ax, ref_data)
 
     # ---- Axis labels -------------------------------------------------------
     ax.set_xlabel("Vial", fontsize=12)
