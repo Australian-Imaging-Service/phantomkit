@@ -124,7 +124,7 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
 
     def _callback(**kwargs):
         input_val: str = kwargs.pop("input")
-        plugin: str = kwargs.pop("plugin")
+        worker: str = kwargs.pop("worker")
         pattern: str = kwargs.pop("pattern")
         # Convert click tuples (from multiple=True) to lists
         wf_kwargs = {
@@ -161,7 +161,7 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
 
         from pydra.engine import Submitter
 
-        with Submitter(worker=plugin) as sub:
+        with Submitter(worker=worker) as sub:
             sub(wf)
         logger.info("Done.")
 
@@ -189,11 +189,11 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
     # Common options
     click_params += [
         click.Option(
-            ["--plugin"],
+            ["--worker"],
             type=click.Choice(["cf", "serial"]),
             default="cf",
             show_default=True,
-            help="Pydra execution plugin.",
+            help="Pydra worker type.",
         ),
         click.Option(
             ["--pattern"],
