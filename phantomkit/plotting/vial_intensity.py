@@ -251,8 +251,8 @@ def plot_vial_intensity(
     sep = detect_separator(csv_file)
     mean_df = pd.read_csv(csv_file, sep=sep)
     if mean_df.shape[1] < 2:
-        sys.exit(
-            "Error: mean CSV must have at least two columns (vial + at least one volume)."
+        raise ValueError(
+            "mean CSV must have at least two columns (vial + at least one volume)."
         )
 
     vials = mean_df.iloc[:, 0].astype(str).str.replace(r"\.mif$", "", regex=True)
@@ -265,8 +265,8 @@ def plot_vial_intensity(
         sep_std = detect_separator(std_csv)
         std_df = pd.read_csv(std_csv, sep=sep_std)
         if std_df.shape[1] < 2:
-            sys.exit(
-                "Error: std CSV must have at least two columns (vial + at least one volume)."
+            raise ValueError(
+                "std CSV must have at least two columns (vial + at least one volume)."
             )
         std_values = std_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
 
