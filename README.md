@@ -7,17 +7,17 @@
 
 # PhantomKit
 
-**PhantomKit** is a Python toolkit for automated quality assurance (QA) of MRI scanners using physical phantoms. It provides pydra-based workflows that register phantom scans to a reference template, extract per-vial signal statistics across multiple contrast types, and generate publication-quality plots — with full support for DWI preprocessing and diffusion metric (ADC, FA) extraction.
+**PhantomKit** is a Python toolkit for automated quality assurance (QA) of MRI scanners using physical phantoms. It provides a high-level processing engine and pydra-based workflows that register phantom scans to a reference template, extract per-vial signal statistics across multiple contrast types, and generate publication-quality plots — with full support for DWI preprocessing and diffusion metric (ADC, FA) extraction.
 
 ## Features
 
 - **End-to-end pipeline** — single command processes a raw DICOM session directory through DWI preprocessing, phantom QC in DWI space, and native contrast QC
 - **Automatic series classification** — DWI, reverse phase-encode, T1, IR, and TE series are detected and paired automatically from folder names and DICOM sidecar metadata; no manual configuration required
-- **DWI preprocessing** — FSL `dwifslpreproc` with automatic phase-encoding correction mode selection (`rpe_none`, `rpe_pair`, `rpe_all`, `rpe_split`), optional denoising/Gibbs correction, tensor fitting, and T1-to-DWI coregistration via FLIRT
+- **DWI preprocessing** — FSL `dwifslpreproc` with automatic phase-encoding correction mode selection (`rpe_none`, `rpe_pair`, `rpe_all`), optional denoising/Gibbs correction, tensor fitting, and T1-to-DWI co-registration via FLIRT
 - **Template-based registration** — iterative ANTs rigid registration with automatic orientation search across a rotation library; vial masks propagated to subject space via inverse transform
-- **Vial metric extraction** — per-vial mean and std across all contrast images (T1, IR, TE, ADC, FA), written to CSV
-- **Plotting** — ADC/FA scatter plots with SPIRIT reference values, T1/IR and T2/TE parametric map plots with mrview ROI overlays
-- **Checkpoint-based resumption** — re-running the pipeline skips stages whose outputs already exist, avoiding redundant reprocessing of expensive steps
+- **Vial metric extraction** — per-vial mean, median, std, min and max across all contrast images (T1, IR, TE, ADC, FA), written to CSV
+- **Plotting** — ADC/FA scatter plots with SPIRIT reference values, T1/IR and T2/TE parametric map plots with mrview ROI overlays and Monte Carlo 95% CI bands
+- **Checkpoint-based resumption** — re-running the pipeline skips stages whose outputs already exist
 - **Parallel batch processing** — pydra-native splitting and combining for multi-session datasets
 
 ## Installation
@@ -28,10 +28,10 @@ python -m pip install phantomkit
 
 ### External dependencies
 
-The DWI pipeline requires FSL, MRtrix3, and ANTs to be available on `PATH`:
+The pipeline requires FSL, MRtrix3, ANTs, and dcm2niix to be available on `PATH`:
 
 - [FSL](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/) — `dwifslpreproc`, `flirt`, `convert_xfm`
-- [MRtrix3](https://www.mrtrix.org/) — `mrconvert`, `dwi2tensor`, `tensor2metric`, `dwidenoise`, `mrdegibbs`, `mrstats`
+- [MRtrix3](https://www.mrtrix.org/) — `mrconvert`, `dwi2tensor`, `tensor2metric`, `dwidenoise`, `mrdegibbs`, `mrstats`, `mrview`
 - [ANTs](http://stnava.github.io/ANTs/) — `antsRegistrationSyN.sh`, `antsApplyTransforms`
 - [dcm2niix](https://github.com/rordenlab/dcm2niix) — DICOM to NIfTI conversion
 
@@ -39,10 +39,13 @@ The DWI pipeline requires FSL, MRtrix3, and ANTs to be available on `PATH`:
 
 ### End-to-end pipeline
 
-Point the pipeline at a session directory containing DICOM subdirectories. It automatically classifies the series, selects the appropriate preprocessing mode, and runs all three stages:
+Point the pipeline at a session directory containing DICOM subdirectories:
 
 ```bash
-phantomkit pipeline     --input-dir  /data/session01     --output-dir /results/session01     --phantom    SPIRIT
+phantomkit pipeline \
+    --input-dir  /data/session01 \
+    --output-dir /results/session01 \
+    --phantom    SPIRIT
 ```
 
 Optional flags:
@@ -73,35 +76,47 @@ Output structure:
     images_template_space/
 ```
 
-### Native contrast QC only (no DWI)
+### Python API
 
-If the input directory contains only T1, IR, and/or TE series (no DWI), the pipeline runs Stage 3 only:
+```python
+from phantomkit.phantom_processor import PhantomProcessor
 
-```bash
-phantomkit pipeline     --input-dir  /data/session01     --output-dir /results/session01     --phantom    SPIRIT
+processor = PhantomProcessor(
+    template_dir="/templates/SPIRIT",
+    output_base_dir="/results",
+    rotation_library_file="/templates/rotations.txt",
+)
+results = processor.process_session("/data/session01/T1.nii.gz")
 ```
 
-### Protocol workflows (pydra API)
+Or via the pydra workflow API:
 
 ```python
 from phantomkit.analyses.vial_signal import VialSignalAnalysis
 
 wf = VialSignalAnalysis(
-    input_image="/data/session01/t1_mprage.nii.gz",
+    input_image="/data/session01/T1.nii.gz",
     template_dir="/templates/SPIRIT",
-    rotation_library_file="/templates/SPIRIT/rotations.txt",
+    rotation_library_file="/templates/rotations.txt",
 )
-outputs = wf(cache_root="/data/cache-root")
+outputs = wf(cache_root="/data/pydra-cache")
 ```
 
-Or via the command line:
+### CLI — run a protocol directly
 
 ```bash
 # Single session
-phantomkit run vial-signal /data/session01/t1_mprage.nii.gz     --template-dir /templates/SPIRIT     --rotation-library-file /templates/SPIRIT/rotations.txt     --output-base-dir /results
+phantomkit run vial-signal /data/session01/T1.nii.gz \
+    --template-dir          /templates/SPIRIT \
+    --rotation-library-file /templates/rotations.txt \
+    --output-base-dir       /results
 
-# Batch — process every matching image found under /data/
-phantomkit run vial-signal /data/     --template-dir /templates/SPIRIT     --rotation-library-file /templates/SPIRIT/rotations.txt     --output-base-dir /results     --pattern "*t1*mprage*.nii.gz"
+# Batch mode — process every matching image under /data/
+phantomkit run vial-signal /data/ \
+    --template-dir          /templates/SPIRIT \
+    --rotation-library-file /templates/rotations.txt \
+    --output-base-dir       /results \
+    --pattern               "*T1*.nii.gz"
 
 # List available protocols
 phantomkit list
@@ -112,14 +127,31 @@ phantomkit list
 Generate QA plots from existing CSV metric files:
 
 ```bash
-# ADC/FA scatter plot
-phantomkit plot vial-intensity     /results/session01/metrics/session01_ADC_mean_matrix.csv scatter     --std-csv  /results/session01/metrics/session01_ADC_std_matrix.csv     --phantom  SPIRIT     --template-dir /templates     --output   /results/session01/metrics/session01_ADC_PLOTmeanstd.png
+# Generic scatter plot
+phantomkit plot vial-intensity \
+    /results/session01/metrics/session01_T1_mean_matrix.csv scatter \
+    --std-csv /results/session01/metrics/session01_T1_std_matrix.csv \
+    --output  /results/session01/metrics/session01_T1_PLOTmeanstd.png
+
+# ADC scatter plot with SPIRIT reference values
+phantomkit plot vial-intensity \
+    /results/session01/metrics/session01_ADC_mean_matrix.csv scatter \
+    --std-csv      /results/session01/metrics/session01_ADC_std_matrix.csv \
+    --phantom      SPIRIT \
+    --template-dir /templates \
+    --output       /results/session01/metrics/session01_ADC_PLOTmeanstd.png
 
 # T1 inversion-recovery parametric map plot
-phantomkit plot maps-ir     /results/session01/images_template_space/ir_*.nii.gz     --metric-dir /results/session01/metrics     --output     /results/session01/metrics/session01_T1map_plot.png
+phantomkit plot maps-ir \
+    /results/session01/images_template_space/se_ir_*.nii.gz \
+    --metric-dir /results/session01/metrics \
+    --output     /results/session01/metrics/session01_T1map_plot.png
 
 # T2 spin-echo parametric map plot
-phantomkit plot maps-te     /results/session01/images_template_space/te_*.nii.gz     --metric-dir /results/session01/metrics     --output     /results/session01/metrics/session01_T2map_plot.png
+phantomkit plot maps-te \
+    /results/session01/images_template_space/t2_se_*.nii.gz \
+    --metric-dir /results/session01/metrics \
+    --output     /results/session01/metrics/session01_T2map_plot.png
 ```
 
 See the [CLI documentation](https://australian-imaging-service.github.io/phantomkit/cli.html) for the full option reference.
