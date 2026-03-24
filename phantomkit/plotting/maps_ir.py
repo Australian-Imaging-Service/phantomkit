@@ -15,19 +15,18 @@ Key outputs:
 
 import matplotlib
 
-matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
-# in a background thread (e.g. ThreadPoolExecutor on macOS)
-
 import logging
 import os
 import re
 
-import argparse
 import click
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
+
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
 
 logger = logging.getLogger(__name__)
 
