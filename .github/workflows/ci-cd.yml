@@ -36,6 +36,12 @@ jobs:
       run: git fetch --prune --unshallow
     - name: Disable etelemetry
       run:  echo "NO_ET=TRUE" >> $GITHUB_ENV
+    - name: Install MRtrix via Conda
+      run: |
+        alias shview='ls'
+        alias mrview='ls'
+        conda install -c mrtrix3 mrtrix3
+        mrconvert --version
     - name: Set up Python ${{ matrix.python-version }} on ${{ matrix.os }}
       uses: actions/setup-python@v2
       with:
