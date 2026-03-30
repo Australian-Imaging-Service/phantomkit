@@ -29,6 +29,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
 # in a background thread (e.g. ThreadPoolExecutor on macOS)
 
+import json
 import re
 import shutil
 import subprocess
@@ -79,6 +80,15 @@ class PhantomProcessor:
 
         # Load rotation library
         self.rotations = self._load_rotations()
+
+        # Load ADC vials from adc_reference.json; fall back to SPIRIT set if absent
+        adc_ref_path = self.template_dir / "adc_reference.json"
+        if adc_ref_path.exists():
+            with open(adc_ref_path) as fh:
+                adc_ref = json.load(fh)
+            self.adc_vials = {v.upper() for v in adc_ref.get("vials", [])}
+        else:
+            self.adc_vials = {"E", "F", "G", "H", "I", "J", "K", "L"}
 
         if not self.template_phantom.exists():
             raise FileNotFoundError(f"Template not found: {self.template_phantom}")
@@ -146,14 +156,26 @@ class PhantomProcessor:
         """
         Validate registration by checking vial intensity rankings.
 
-        Criteria:
+        Criteria (SPIRIT):
           - No vial std > 60
           - High-intensity vials A, O, Q are in top-5 by mean
           - Low-intensity vials S, D, P are in bottom-5 by mean
 
+        For phantoms other than SPIRIT, registration criteria have not yet
+        been defined — the check is skipped and the first registration is
+        accepted as successful.
+
         All failures are collected and reported before returning False,
         so a single run produces the full diagnostic picture.
         """
+        if self.phantom_name != "SPIRIT":
+            print(
+                f"  [Registration check] Skipped — "
+                f"criteria not yet defined for {self.phantom_name}. "
+                f"Accepting first registration."
+            )
+            return True
+
         vial_means: Dict[str, float] = {}
         high_std_vials: List[Tuple[str, float]] = []
         failures: List[str] = []
@@ -604,8 +626,6 @@ class PhantomProcessor:
 
         clean_contrast_name = contrast_name
 
-        # ADC is only defined for vials E–L; restrict processing accordingly
-        adc_vials = {"E", "F", "G", "H", "I", "J", "K", "L"}
         contrast_type = self._classify_contrast(contrast_file)
         if contrast_type == "adc":
             original_count = len(vial_masks)
@@ -617,10 +637,10 @@ class PhantomProcessor:
                 .replace(".nii", "")
                 .split(".")[0]
                 .upper()
-                in adc_vials
+                in self.adc_vials
             ]
             print(
-                f"  [ADC mode] Restricting to vials E–L "
+                f"  [ADC mode] Restricting to {len(self.adc_vials)} ADC vials "
                 f"({len(vial_masks)} of {original_count})"
             )
 

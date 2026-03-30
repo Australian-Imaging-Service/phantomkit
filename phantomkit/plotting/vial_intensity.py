@@ -270,19 +270,19 @@ def plot_vial_intensity(
             )
         std_values = std_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
 
-    # ---- In ADC mode, restrict to vials E–L --------------------------------
-    ADC_VIALS = ["E", "F", "G", "H", "I", "J", "K", "L"]
-    if contrast_mode == "adc":
-        mask = vials.str.upper().isin(ADC_VIALS)
-        vials = vials[mask].reset_index(drop=True)
-        mean_values = mean_values[mask.values]
-        if std_values is not None:
-            std_values = std_values[mask.values]
-
     # ---- Load ADC reference (ADC mode only) --------------------------------
     ref_data = None
     if contrast_mode == "adc":
         ref_data = load_adc_reference(template_dir, phantom)
+
+    # ---- In ADC mode, restrict to vials defined in adc_reference.json ------
+    if contrast_mode == "adc" and ref_data is not None:
+        adc_vials = [v.upper() for v in ref_data["vials"]]
+        mask = vials.str.upper().isin(adc_vials)
+        vials = vials[mask].reset_index(drop=True)
+        mean_values = mean_values[mask.values]
+        if std_values is not None:
+            std_values = std_values[mask.values]
 
     # ---- Setup figure ------------------------------------------------------
     ncols = 2 if roi_image else 1
