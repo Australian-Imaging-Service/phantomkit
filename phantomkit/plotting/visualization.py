@@ -120,6 +120,14 @@ class MrView(shell.Task["MrView.Outputs"]):
         argstr="-capture.prefix",
         help="Filename prefix for the screenshot.",
     )
+    intensity_range: str | None = shell.arg(
+        default=None,
+        argstr="-intensity_range",
+        help=(
+            "Display intensity range as 'min,max'. "
+            "Use '0,1' for FA maps and '0,0.005' for ADC maps."
+        ),
+    )
     capture_grab: bool = shell.arg(
         default=True,
         argstr="-capture.grab",
@@ -211,6 +219,35 @@ def GeneratePlots(
 
     vial_masks_list = sorted(vial_path.glob("*.nii.gz"))  # triggers runtime fallback
 
+    def _classify_contrast(stem: str) -> str | None:
+        """Detect ADC / FA contrast types from filename stem."""
+        import re as _re2
+        if _re2.search(r"ADC", stem, _re2.IGNORECASE):
+            return "adc"
+        if _re2.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", stem):
+            return "fa"
+        return None
+
+    def _intensity_range_for(contrast_type: str | None) -> str | None:
+        if contrast_type == "fa":
+            return "0,1"
+        if contrast_type == "adc":
+            return "0,0.005"
+        return None
+
+    # Resolve template_dir (parent of phantom-specific dir) from metrics_dir.
+    # metrics_dir is <output_dir>/<session>/metrics/ — template_data/ is
+    # resolved from the installed package location.
+    import importlib.util as _ilu
+    _pkg_spec = _ilu.find_spec("phantomkit")
+    _pkg_dir = _Path(_pkg_spec.origin).parent if _pkg_spec else _Path(metrics_dir)
+    _template_data_root = None
+    for _candidate in [_pkg_dir.parent / "template_data",
+                       _pkg_dir / "template_data"]:
+        if _candidate.is_dir():
+            _template_data_root = str(_candidate)
+            break
+
     # Per-contrast scatter plots
     for contrast_file in contrast_files:
         contrast_path = _Path(contrast_file)
@@ -223,6 +260,9 @@ def GeneratePlots(
         output_plot = str(
             metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
         )
+
+        contrast_type = _classify_contrast(contrast_path.stem)
+        intensity_range_str = _intensity_range_for(contrast_type)
 
         roi_image: File | None = None
         if vial_masks_list:
@@ -244,6 +284,7 @@ def GeneratePlots(
                     comments=0,
                     noannotations=True,
                     fullscreen=True,
+                    intensity_range=intensity_range_str,
                     capture_folder=tmp_vial_dir,
                     capture_prefix=f"{contrast_name}_roi_overlay",
                 ),
@@ -251,6 +292,10 @@ def GeneratePlots(
             )
             roi_image = screenshot.out_png
 
+        # Determine phantom name from metrics_dir path structure:
+        # <output_dir>/<session>/metrics/ — we don't know phantom here,
+        # so pass None and let plot_vial_intensity skip ADC reference if absent.
+        # For ADC mode to work fully, callers should use PhantomProcessor directly.
         workflow.add(
             python.define(plot_vial_intensity)(
                 csv_file=mean_csv,
@@ -258,6 +303,8 @@ def GeneratePlots(
                 std_csv=std_csv,
                 roi_image=roi_image,
                 output=output_plot,
+                phantom=None,
+                template_dir=_template_data_root,
             ),
             name=f"scatter_{contrast_name}",
         )
@@ -267,7 +314,7 @@ def GeneratePlots(
         return bool(_re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
 
     for contrast_type, plot_fn, suffix in [
-        ("ir", plot_ir, "ir_map_PLOTmeanstd_TEmapping.png"),
+        ("ir", plot_ir, "ir_map_PLOTmeanstd_T1mapping.png"),
         ("te", plot_te, "TE_map_PLOTmeanstd_TEmapping.png"),
     ]:
         matching = [f for f in contrast_files if _matches(_Path(f).stem, contrast_type)]

@@ -13,22 +13,29 @@ Key outputs:
 ================================================================================
 """
 
-import logging
-import os
-import re
+import matplotlib
 
-import click
-import matplotlib.pyplot as plt
-import numpy as np
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
+
 import pandas as pd
+import matplotlib.pyplot as plt
+import os
+import numpy as np
+import argparse
+import click
+import re
 from scipy.optimize import curve_fit
-
-logger = logging.getLogger(__name__)
 
 
 def find_csv_file(metric_dir, contrast_name, suffix):
     """
     Find a CSV file in a directory that matches the contrast name and suffix.
+
+    Uses an exact token match: the contrast_name must appear in the filename
+    immediately followed by the suffix (no extra characters between them).
+    This prevents ambiguous substring hits such as 't2_se_TE_14' matching
+    't2_se_TE_140_mean_matrix.csv'.
 
     Args:
         metric_dir: Directory containing CSV files
@@ -41,8 +48,9 @@ def find_csv_file(metric_dir, contrast_name, suffix):
     Raises:
         FileNotFoundError: If no matching file is found
     """
+    exact_tail = contrast_name + suffix
     for f in os.listdir(metric_dir):
-        if contrast_name in f and f.endswith(suffix):
+        if f.endswith(exact_tail):
             return os.path.join(metric_dir, f)
     raise FileNotFoundError(
         f"No CSV file found for contrast '{contrast_name}' with suffix '{suffix}' in {metric_dir}"
@@ -103,12 +111,12 @@ def calc_r2(y_true, y_pred):
 
 
 def plot_vial_te_means_std(
-    contrast_files: list[str],
-    metric_dir: str,
-    output_file: str = "vial_summary_pub.png",
-    annotate: bool = False,
-    roi_image: str | None = None,
-) -> str:
+    contrast_files,
+    metric_dir,
+    output_file="vial_summary_pub.png",
+    annotate=False,
+    roi_image=None,
+):
     """
     Create publication-quality plots of vial intensity data with T2 curve fitting.
 
@@ -121,9 +129,6 @@ def plot_vial_te_means_std(
         output_file: Output filename for the plot (default: 'vial_summary_pub.png')
         annotate: Whether to annotate points with mean ± std (not currently used)
         roi_image: Optional path to ROI overlay image for extra subplot
-
-    Returns:
-        Absolute path to the saved plot file.
     """
 
     # ========================================================================
@@ -296,9 +301,7 @@ def plot_vial_te_means_std(
 
                 except (np.linalg.LinAlgError, ValueError) as e:
                     # Covariance matrix might be singular or ill-conditioned
-                    logger.warning(
-                        "Could not calculate 95%% CI for vial %s: %s", vial, e
-                    )
+                    print(f"[WARN] Could not calculate 95% CI for vial {vial}: {e}")
 
                 # ============================================================
                 # *** FITTED CURVE AND CI BAND PLOTTING ***
@@ -327,7 +330,7 @@ def plot_vial_te_means_std(
                 )
             except RuntimeError:
                 # Curve fitting failed for this vial
-                logger.warning("Could not fit T\u2082 for vial %s", vial)
+                print(f"[WARN] Could not fit T₂ for vial {vial}")
 
         # --------------------------------------------------------------------
         # CASE 2: Multiple vials in one subplot
@@ -495,41 +498,25 @@ def plot_vial_te_means_std(
     # ========================================================================
     plt.tight_layout(rect=[0, 0, 1, 1])
     plt.savefig(output_file, dpi=300, bbox_inches="tight")
-    logger.info("Publication-ready plot saved to %s", output_file)
+    print(f"[INFO] Publication-ready plot saved to {output_file}")
 
     # Save fitted T2 values to CSV
     csv_output = os.path.splitext(output_file)[0] + "_T2_fits.csv"
     pd.DataFrame(fit_results).to_csv(csv_output, index=False)
-    logger.info("Fitted parameters saved to %s", csv_output)
+    print(f"[INFO] Fitted parameters saved to {csv_output}")
 
     plt.close(fig)
-    return os.path.abspath(output_file)
+    return output_file
 
 
-@click.command()
+@click.command("maps-te")
 @click.argument("contrast_files", nargs=-1, required=True)
-@click.option(
-    "-m",
-    "--metric_dir",
-    required=True,
-    help="Directory containing the mean/std CSV files.",
-)
-@click.option(
-    "-o",
-    "--output",
-    default="vial_summary_pub.png",
-    show_default=True,
-    help="Output filename for the plot.",
-)
-@click.option("--annotate", is_flag=True, help="Annotate each point with mean ± std.")
-@click.option(
-    "--roi_image",
-    default=None,
-    help="Path to ROI overlay PNG image for the extra subplot.",
-)
+@click.option("-m", "--metric-dir", required=True, help="Directory with mean/std CSVs.")
+@click.option("-o", "--output", default="vial_summary_pub.png", show_default=True)
+@click.option("--annotate", is_flag=True, default=False)
+@click.option("--roi-image", default=None)
 def main(contrast_files, metric_dir, output, annotate, roi_image):
-    """Plot grouped vial mean ± std with mono-exponential T₂ fitting and save fit metrics."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    """Plot vial mean ± std for T2 spin-echo with mono-exponential fitting."""
     plot_vial_te_means_std(
         list(contrast_files),
         metric_dir=metric_dir,

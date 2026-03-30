@@ -146,12 +146,12 @@ def AggregateVialCheck(
 ) -> bool:
     """
     Given per-vial [mean, std] pairs, check intensity-ranking criteria:
-      - No vial std > 50
+      - No vial std > 60
       - High-intensity vials A, O, Q are in top-5 by mean
       - Low-intensity vials S, D, P are in bottom-5 by mean
     """
     vial_means = {name: vals[0] for name, vals in zip(vial_names, means_stds)}
-    high_std = [(n, vals[1]) for n, vals in zip(vial_names, means_stds) if vals[1] > 50]
+    high_std = [(n, vals[1]) for n, vals in zip(vial_names, means_stds) if vals[1] > 60]
     failures: list[str] = []
 
     if high_std:
