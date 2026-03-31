@@ -6,7 +6,7 @@ Core phantom processing engine for the phantomkit package.
 
 Contains ``PhantomProcessor``, a class that orchestrates:
 
-  1. Iterative ANTs registration with orientation correction
+  1. ANTs registration
   2. Vial mask inverse-transform to subject space
   3. Per-vial metric extraction from all contrast images
   4. Plot generation (per-contrast scatter plots, T1/T2 parametric maps)
@@ -21,7 +21,6 @@ Path conventions (shared repo):
     template_data/<phantom>/ImageTemplate.nii.gz
     template_data/<phantom>/vials_labelled/*.nii.gz
     template_data/<phantom>/adc_reference.json
-    template_data/rotations.txt
 """
 
 import matplotlib
@@ -57,19 +56,15 @@ class PhantomProcessor:
     output_base_dir:
         Top-level output directory.  Results are written to a
         ``<session_name>/`` subdirectory within this path.
-    rotation_library_file:
-        Path to ``rotations.txt``.
     """
 
     def __init__(
         self,
         template_dir: str,
         output_base_dir: str,
-        rotation_library_file: str,
     ):
         self.template_dir = Path(template_dir)
         self.output_base_dir = Path(output_base_dir)
-        self.rotation_library_file = rotation_library_file
 
         # Phantom name is the last component of template_dir (e.g. "SPIRIT")
         self.phantom_name = self.template_dir.name
@@ -77,9 +72,6 @@ class PhantomProcessor:
         self.template_phantom = self.template_dir / "ImageTemplate.nii.gz"
         self.vial_dir = self.template_dir / "vials_labelled"
         self.vial_masks = sorted(self.vial_dir.glob("*.nii.gz"))
-
-        # Load rotation library
-        self.rotations = self._load_rotations()
 
         # Load ADC vials from adc_reference.json; fall back to SPIRIT set if absent
         adc_ref_path = self.template_dir / "adc_reference.json"
@@ -98,28 +90,6 @@ class PhantomProcessor:
     # -------------------------------------------------------------------------
     # Private helpers
     # -------------------------------------------------------------------------
-
-    def _load_rotations(self) -> List[str]:
-        """Load rotation matrix strings from the rotation library file."""
-        rotations = []
-        with open(self.rotation_library_file, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                match = re.search(r'"([^"]+)"', line)
-                if match:
-                    rotations.append(match.group(1))
-        return rotations
-
-    def _create_rotation_matrix_file(self, rotation_str: str, output_file: str):
-        """Convert a 9-element rotation string to a 4×4 affine matrix text file."""
-        values = rotation_str.split()
-        with open(output_file, "w") as f:
-            f.write(f"{values[0]} {values[1]} {values[2]} 0\n")
-            f.write(f"{values[3]} {values[4]} {values[5]} 0\n")
-            f.write(f"{values[6]} {values[7]} {values[8]} 0\n")
-            f.write("0 0 0 1\n")
 
     def _run_ants_registration(
         self, input_image: str, output_prefix: str
@@ -152,266 +122,27 @@ class PhantomProcessor:
         inverse_warped = f"{output_prefix}InverseWarped.nii.gz"
         return warped, transform, inverse_warped
 
-    def _check_registration(self, warped_image: str) -> bool:
-        """
-        Validate registration by checking vial intensity rankings.
-
-        Criteria (SPIRIT):
-          - No vial std > 60
-          - High-intensity vials A, O, Q are in top-5 by mean
-          - Low-intensity vials S, D, P are in bottom-5 by mean
-
-        For phantoms other than SPIRIT, registration criteria have not yet
-        been defined — the check is skipped and the first registration is
-        accepted as successful.
-
-        All failures are collected and reported before returning False,
-        so a single run produces the full diagnostic picture.
-        """
-        if self.phantom_name != "SPIRIT":
-            print(
-                f"  [Registration check] Skipped — "
-                f"criteria not yet defined for {self.phantom_name}. "
-                f"Accepting first registration."
-            )
-            return True
-
-        vial_means: Dict[str, float] = {}
-        high_std_vials: List[Tuple[str, float]] = []
-        failures: List[str] = []
-
-        for vial_mask in self.vial_masks:
-            vial_name = (
-                vial_mask.name.replace(".nii.gz", "")
-                .replace(".nii", "")
-                .replace("Vial", "")
-                .replace("vial", "")
-                .strip()
-            )
-
-            cmd_regrid = [
-                "mrgrid",
-                str(vial_mask),
-                "-template",
-                warped_image,
-                "-interp",
-                "nearest",
-                "-quiet",
-                "regrid",
-                "-",
-            ]
-            cmd_mean = [
-                "mrstats",
-                "-quiet",
-                warped_image,
-                "-output",
-                "mean",
-                "-mask",
-                "-",
-            ]
-
-            proc_regrid = subprocess.Popen(
-                cmd_regrid, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc_mean = subprocess.Popen(
-                cmd_mean,
-                stdin=proc_regrid.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            proc_regrid.stdout.close()
-            mean_output, mean_error = proc_mean.communicate()
-
-            if proc_mean.returncode != 0:
-                raise RuntimeError(f"mrstats failed for {vial_name}: {mean_error}")
-            if not mean_output.strip():
-                raise RuntimeError(f"mrstats returned empty output for {vial_name}")
-
-            try:
-                mean_val = float(mean_output.strip())
-            except ValueError:
-                raise ValueError(
-                    f"Invalid mean value for {vial_name}: {mean_output.strip()}"
-                )
-            vial_means[vial_name] = mean_val
-
-            # Std check
-            cmd_std = [
-                "mrstats",
-                "-quiet",
-                warped_image,
-                "-output",
-                "std",
-                "-mask",
-                "-",
-            ]
-            proc_regrid2 = subprocess.Popen(
-                cmd_regrid, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            proc_std = subprocess.Popen(
-                cmd_std,
-                stdin=proc_regrid2.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            proc_regrid2.stdout.close()
-            std_output, _ = proc_std.communicate()
-
-            if proc_std.returncode == 0 and std_output.strip():
-                std_val = float(std_output.strip())
-                if std_val > 60:
-                    high_std_vials.append((vial_name, std_val))
-
-        # CRITERION 1: High std
-        if high_std_vials:
-            failures.append(
-                f"High standard deviation detected in {len(high_std_vials)} vial(s) "
-                f"(threshold: 60.0)"
-            )
-            for vn, sv in high_std_vials:
-                failures.append(f"  - Vial {vn}: std = {sv:.2f}")
-
-        sorted_vials = sorted(vial_means.items(), key=lambda x: x[1], reverse=True)
-        top5 = [v[0] for v in sorted_vials[:5]]
-        bottom5 = [v[0] for v in sorted_vials[-5:]]
-
-        required_top = ["A", "O", "Q"]
-        required_bottom = ["S", "D", "P"]
-
-        # CRITERION 2: Required high-intensity vials
-        missing_top = [v for v in required_top if v not in top5]
-        if missing_top:
-            failures.append(
-                f"Required high-intensity vials NOT in top 5: {missing_top}"
-            )
-            failures.append(f"  Expected in top 5: {required_top}")
-            failures.append(f"  Actual top 5: {top5}")
-            for v in missing_top:
-                actual_rank = [name for name, _ in sorted_vials].index(v) + 1
-                failures.append(
-                    f"  Vial {v} is at rank #{actual_rank} with "
-                    f"intensity {vial_means[v]:.1f}"
-                )
-
-        # CRITERION 3: Required low-intensity vials
-        missing_bottom = [v for v in required_bottom if v not in bottom5]
-        if missing_bottom:
-            failures.append(
-                f"Required low-intensity vials NOT in bottom 5: {missing_bottom}"
-            )
-            failures.append(f"  Expected in bottom 5: {required_bottom}")
-            failures.append(f"  Actual bottom 5: {bottom5}")
-            for v in missing_bottom:
-                actual_rank = [name for name, _ in sorted_vials].index(v) + 1
-                failures.append(
-                    f"  Vial {v} is at rank #{actual_rank} with "
-                    f"intensity {vial_means[v]:.1f}"
-                )
-
-        if failures:
-            print(f"  ✗ Registration check FAILED - {len(failures)} issue(s):")
-            print(f"  {'=' * 58}")
-            for msg in failures:
-                print(f"  {msg}")
-            print(f"  {'=' * 58}")
-            print(f"\n  All vial intensities (sorted):")
-            for i, (vn, intensity) in enumerate(sorted_vials, 1):
-                marker = ""
-                if vn in required_top:
-                    marker = " ← expected high"
-                elif vn in required_bottom:
-                    marker = " ← expected low"
-                print(f"    #{i:2d}. Vial {vn}: {intensity:.1f}{marker}")
-            return False
-        else:
-            print(f"  ✓ Registration check passed")
-            print(f"    Top 5 vials: {top5}")
-            print(f"    Bottom 5 vials: {bottom5}")
-            return True
-
-    def _apply_rotation(
-        self, input_image: str, rotation_matrix_file: str, output_image: str
-    ):
-        """Apply rotation to an image using mrtransform."""
-        cmd = [
-            "mrtransform",
-            input_image,
-            output_image,
-            "-linear",
-            rotation_matrix_file,
-            "-interp",
-            "nearest",
-            "-force",
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(f"Rotation failed: {result.stderr}")
-
-    def _register_with_iteration(
+    def _register(
         self, input_image: str, session_name: str, tmp_dir: Path
-    ) -> Tuple[str, str, str, int, str, Optional[str]]:
+    ) -> Tuple[str, str, str]:
         """
-        Iteratively register the input image to the template phantom.
+        Register the input image to the template phantom.
 
         Returns
         -------
-        (warped, transform, inverse_warped, iteration, current_input,
-         rotation_matrix_file)
-        rotation_matrix_file is None when no rotation was needed (iteration 1).
+        (warped, transform, inverse_warped)
         """
-        iteration = 0
-        correct_orientation = False
-        current_input = input_image
-        rotation_matrix_file = None
-        warped = transform = inverse_warped = None
-
-        while not correct_orientation and iteration < len(self.rotations):
-            iteration += 1
-            print(f"\n=== Iteration {iteration} ===")
-
-            output_prefix = str(tmp_dir / f"{session_name}_Transformed{iteration}_")
-            warped, transform, inverse_warped = self._run_ants_registration(
-                current_input, output_prefix
-            )
-            correct_orientation = self._check_registration(warped)
-
-            if not correct_orientation and iteration < len(self.rotations):
-                print(f"  ✗ Registration check failed, trying rotation {iteration}")
-                rotation_str = self.rotations[iteration]
-                rotation_matrix_file = str(tmp_dir / f"rotation_{iteration + 1}.txt")
-                self._create_rotation_matrix_file(rotation_str, rotation_matrix_file)
-
-                rotated_input = str(
-                    tmp_dir / f"{session_name}_iteration{iteration + 1}.nii.gz"
-                )
-                self._apply_rotation(input_image, rotation_matrix_file, rotated_input)
-                current_input = rotated_input
-            elif correct_orientation:
-                print(f"  ✓ Correct orientation found at iteration {iteration}")
-                break
-
-        if not correct_orientation:
-            raise RuntimeError(
-                f"Failed to find correct orientation after {iteration} attempts"
-            )
-
-        return (
-            warped,
-            transform,
-            inverse_warped,
-            iteration,
-            current_input,
-            rotation_matrix_file,
+        output_prefix = str(tmp_dir / f"{session_name}_Transformed_")
+        warped, transform, inverse_warped = self._run_ants_registration(
+            input_image, output_prefix
         )
+        print(f"  ✓ Registration complete")
+        return warped, transform, inverse_warped
 
     def _transform_vials_to_subject_space(
         self,
         reference_image: str,
         transform_matrix: str,
-        rotation_matrix_file: Optional[str],
-        iteration: int,
         output_vial_dir: Path,
     ) -> List[str]:
         """Transform vial masks from template space into subject (scanner) space."""
@@ -452,22 +183,7 @@ class PhantomProcessor:
             if result.returncode != 0:
                 raise RuntimeError(f"Transform failed for {vial_name}: {result.stderr}")
 
-            # Apply inverse rotation (iteration > 1) or simple copy
-            if iteration > 1 and rotation_matrix_file:
-                cmd = [
-                    "mrtransform",
-                    tmp_vial,
-                    output_vial,
-                    "-linear",
-                    rotation_matrix_file,
-                    "-interp",
-                    "nearest",
-                    "-inverse",
-                    "-force",
-                ]
-            else:
-                cmd = ["mrconvert", "-quiet", tmp_vial, output_vial, "-force"]
-
+            cmd = ["mrconvert", "-quiet", tmp_vial, output_vial, "-force"]
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 raise RuntimeError(
@@ -482,8 +198,6 @@ class PhantomProcessor:
         self,
         contrast_file: Path,
         transform_matrix: str,
-        rotation_matrix_file: Optional[str],
-        iteration: int,
         tmp_dir: Path,
     ) -> str:
         """
@@ -500,27 +214,7 @@ class PhantomProcessor:
         tmp_dir.mkdir(parents=True, exist_ok=True)
         contrast_name = contrast_file.stem.replace(".nii", "")
 
-        # Replicate the rotation applied to the input before registration
-        if iteration > 1 and rotation_matrix_file:
-            rotated_contrast = str(tmp_dir / f"{contrast_name}_rotated.nii.gz")
-            cmd = [
-                "mrtransform",
-                str(contrast_file),
-                rotated_contrast,
-                "-linear",
-                rotation_matrix_file,
-                "-interp",
-                "linear",
-                "-force",
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise RuntimeError(
-                    f"Rotation of contrast {contrast_name} failed: {result.stderr}"
-                )
-            source_image = rotated_contrast
-        else:
-            source_image = str(contrast_file)
+        source_image = str(contrast_file)
 
         # Detect 4D and single-slice
         detect = subprocess.run(
@@ -1044,39 +738,21 @@ class PhantomProcessor:
         print(f"Output: {output_dir}")
         print(f"{'=' * 60}\n")
 
-        # Step 1: Registration with iterative orientation correction
-        print("Step 1: Registration with orientation correction")
-        (
-            warped,
-            transform,
-            inverse_warped,
-            iteration,
-            rotated_input,
-            rotation_matrix_file,
-        ) = self._register_with_iteration(str(input_image), session_name, tmp_dir)
+        # Step 1: Registration
+        print("Step 1: Registration")
+        warped, transform, inverse_warped = self._register(
+            str(input_image), session_name, tmp_dir
+        )
 
         # Save template in scanner space
         template_scanner_space = str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz")
-        if iteration == 1:
-            cmd = [
-                "mrconvert",
-                "-quiet",
-                inverse_warped,
-                template_scanner_space,
-                "-force",
-            ]
-        else:
-            cmd = [
-                "mrtransform",
-                inverse_warped,
-                template_scanner_space,
-                "-linear",
-                rotation_matrix_file,
-                "-interp",
-                "nearest",
-                "-inverse",
-                "-force",
-            ]
+        cmd = [
+            "mrconvert",
+            "-quiet",
+            inverse_warped,
+            template_scanner_space,
+            "-force",
+        ]
         subprocess.run(cmd, check=True, capture_output=True)
         print(f"  ✓ Saved template in scanner space")
 
@@ -1092,8 +768,6 @@ class PhantomProcessor:
         transformed_vials = self._transform_vials_to_subject_space(
             reference_image=str(input_image),
             transform_matrix=transform,
-            rotation_matrix_file=rotation_matrix_file,
-            iteration=iteration,
             output_vial_dir=vial_dir,
         )
         print(f"  ✓ Transformed {len(transformed_vials)} vial masks")
@@ -1130,8 +804,6 @@ class PhantomProcessor:
             warped_path = self._transform_contrast_to_template_space(
                 contrast_file=contrast_file,
                 transform_matrix=transform,
-                rotation_matrix_file=rotation_matrix_file,
-                iteration=iteration,
                 tmp_dir=tmp_template_space_dir,
             )
             shutil.copy2(
@@ -1170,6 +842,5 @@ class PhantomProcessor:
             "vial_dir": str(vial_dir),
             "images_template_space_dir": str(images_template_space_dir),
             "space_image": str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz"),
-            "iteration": iteration,
             "metrics": all_metrics,
         }

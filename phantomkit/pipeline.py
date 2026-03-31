@@ -82,7 +82,6 @@ def _find_template_data_root() -> Path:
 
 
 TEMPLATE_DATA_ROOT = _find_template_data_root()
-ROTATIONS_FILE = TEMPLATE_DATA_ROOT / "rotations.txt"
 
 
 def _find_dwi_processing_script() -> Path:
@@ -287,7 +286,6 @@ def run_stage2(
         processor = PhantomProcessor(
             template_dir=str(template_dir),
             output_base_dir=str(output_dir),
-            rotation_library_file=str(ROTATIONS_FILE),
         )
         processor.process_session(str(t1_in_dwi))
         print()
@@ -384,7 +382,6 @@ def run_stage3(
     processor = PhantomProcessor(
         template_dir=str(template_dir),
         output_base_dir=str(output_dir),
-        rotation_library_file=str(ROTATIONS_FILE),
     )
     processor.process_session(str(t1_nii_path))
 
@@ -434,9 +431,6 @@ def validate_inputs(args):
             errors.append(
                 f"vials_labelled/ with .nii.gz masks not found in: {phantom_dir}"
             )
-
-    if not ROTATIONS_FILE.exists():
-        errors.append(f"rotations.txt not found: {ROTATIONS_FILE}")
 
     if not DWI_SCRIPT.exists():
         errors.append(f"DWI processing script not found: {DWI_SCRIPT}")
