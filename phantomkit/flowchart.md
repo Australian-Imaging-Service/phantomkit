@@ -49,3 +49,4 @@ flowchart TD
     S3 -.-> DONE
 
     DONE(["outputs/\n  {session}/metrics/\n  {session}/vial_segmentations/\n  {session}/images_template_space/\n  {session}/TemplatePhantom_ScannerSpace.nii.gz"])
+```
