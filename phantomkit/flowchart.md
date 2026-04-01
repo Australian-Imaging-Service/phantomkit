@@ -1,3 +1,4 @@
+```mermaid
 flowchart TD
     INPUT[/"--input-dir  --phantom  --output-dir"/]
 
