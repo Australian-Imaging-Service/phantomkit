@@ -73,14 +73,15 @@ class PhantomProcessor:
         self.vial_dir = self.template_dir / "vials_labelled"
         self.vial_masks = sorted(self.vial_dir.glob("*.nii.gz"))
 
-        # Load ADC vials from adc_reference.json; fall back to SPIRIT set if absent
+        # Load ADC vials from adc_reference.json
         adc_ref_path = self.template_dir / "adc_reference.json"
-        if adc_ref_path.exists():
-            with open(adc_ref_path) as fh:
-                adc_ref = json.load(fh)
-            self.adc_vials = {v.upper() for v in adc_ref.get("vials", [])}
-        else:
-            self.adc_vials = {"E", "F", "G", "H", "I", "J", "K", "L"}
+        if not adc_ref_path.exists():
+            raise FileNotFoundError(f"adc_reference.json not found: {adc_ref_path}")
+        with open(adc_ref_path) as fh:
+            adc_ref = json.load(fh)
+        if "vials" not in adc_ref:
+            raise KeyError(f"'vials' key missing from: {adc_ref_path}")
+        self.adc_vials = {v.upper() for v in adc_ref["vials"]}
 
         if not self.template_phantom.exists():
             raise FileNotFoundError(f"Template not found: {self.template_phantom}")

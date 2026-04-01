@@ -1,5 +1,7 @@
 {
     "vials": ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"],
+    "phantom_diameter_mm": null,
+    "mask_erosion_mm": null,
     "adc_mm2_per_s": {
         "A": 1.0e-3,
         "B": 0.84e-3,
