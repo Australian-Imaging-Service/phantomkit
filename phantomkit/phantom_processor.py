@@ -200,7 +200,11 @@ def _task_register(
     print("Running ANTs registration...")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(f"ANTs failed: {result.stderr}")
+        raise RuntimeError(
+            f"ANTs failed (exit {result.returncode}):\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
     print("  ✓ Registration complete")
     return (
         f"{output_prefix}Warped.nii.gz",
@@ -695,6 +699,128 @@ def _task_cleanup(
 
 
 # =============================================================================
+# Module-level Pydra workflow  (explicit parameters — no closure capture)
+# =============================================================================
+
+
+@workflow.define(outputs=["out"])
+def PhantomSessionWf(
+    input_image: str,
+    template_phantom: str,
+    vial_masks: list,
+    adc_vials: list,
+    output_prefix: str,
+    output_dir_str: str,
+    session_name: str,
+    phantom_name: str,
+    template_dir_parent: str,
+    contrast_files: list,
+) -> str:
+    """
+    End-to-end phantom QC workflow.
+
+    All inputs are passed explicitly (no closure) to avoid Pydra global
+    registry collisions when the workflow is instantiated multiple times
+    within the same Python process (e.g. Stage 2 + Stage 3 in parallel).
+    """
+    from pathlib import Path as _Path
+
+    _output_dir = _Path(output_dir_str)
+    _tmp_dir = _output_dir / "tmp"
+    _vial_dir = _output_dir / "vial_segmentations"
+    _metrics_dir = _output_dir / "metrics"
+    _images_dir = _output_dir / "images_template_space"
+
+    # Step 1: ANTs registration
+    reg = workflow.add(
+        _task_register(
+            input_image=input_image,
+            template_phantom=template_phantom,
+            output_prefix=output_prefix,
+        ),
+        name="registration",
+    )
+
+    # Step 1b: Save template in scanner space (depends on reg via data)
+    workflow.add(
+        _task_save_scanner_space_template(
+            inverse_warped=reg.inverse_warped,
+            output_path=str(_output_dir / "TemplatePhantom_ScannerSpace.nii.gz"),
+        ),
+        name="save_scanner_space_template",
+    )
+
+    # Step 2: Transform vials to subject space (depends on reg via data)
+    vials = workflow.add(
+        _task_transform_vials(
+            vial_masks=vial_masks,
+            reference_image=input_image,
+            transform_matrix=reg.transform,
+            output_vial_dir=str(_vial_dir),
+            tmp_vial_dir=str(_output_dir / "tmp_vials"),
+        ),
+        name="transform_vials",
+    )
+
+    # Step 3: Extract metrics (depends on vials via data)
+    metrics = workflow.add(
+        _task_extract_metrics(
+            contrast_files=contrast_files,
+            vial_paths=vials.vial_paths,
+            adc_vials=adc_vials,
+            output_metrics_dir=str(_metrics_dir),
+            session_name=session_name,
+            tmp_vols_dir=str(_output_dir / "tmp_vols"),
+        ),
+        name="extract_metrics",
+    )
+
+    # Step 4: Generate plots (depends on metrics via sentinel)
+    plots = workflow.add(
+        _task_generate_plots(
+            contrast_files=contrast_files,
+            metrics_dir=str(_metrics_dir),
+            vial_dir=str(_vial_dir),
+            session_name=session_name,
+            phantom_name=phantom_name,
+            template_dir=template_dir_parent,
+            metrics_sentinel=metrics.sentinel,
+        ),
+        name="generate_plots",
+    )
+
+    # Step 5: Forward-transform contrasts to template space
+    # (depends on reg via data; runs in parallel with Steps 2–4)
+    template_contrasts = workflow.add(
+        _task_transform_contrasts(
+            contrast_files=contrast_files,
+            transform_matrix=reg.transform,
+            template_phantom=template_phantom,
+            output_dir=str(_images_dir),
+            tmp_dir=str(_tmp_dir / "template_space_contrasts"),
+        ),
+        name="transform_contrasts",
+    )
+
+    # Step 6: Cleanup (depends on Steps 4+5 via sentinels)
+    cleanup = workflow.add(
+        _task_cleanup(
+            dirs_to_remove=[
+                str(_tmp_dir),
+                str(_output_dir / "tmp_vials"),
+                str(_output_dir / "tmp_vols"),
+                str(_vial_dir / "tmp"),
+            ],
+            sentinel_plots=plots.sentinel,
+            sentinel_template=template_contrasts.sentinel,
+        ),
+        name="cleanup",
+    )
+
+    return cleanup.out
+
+
+# =============================================================================
 # PhantomProcessor
 # =============================================================================
 
@@ -793,122 +919,18 @@ class PhantomProcessor:
             if f.name != "TemplatePhantom_ScannerSpace.nii.gz"
         ]
 
-        # Capture all values needed inside the workflow closure
-        template_phantom = str(self.template_phantom)
-        vial_masks = [str(m) for m in self.vial_masks]
-        adc_vials = list(self.adc_vials)
-        phantom_name = self.phantom_name
-        template_dir_parent = str(self.template_dir.parent)
-        output_prefix = str(tmp_dir / f"{session_name}_Transformed_")
-
-        @workflow.define(outputs=["out"])
-        def PhantomSessionWf(x: int) -> str:
-
-            # Step 1: ANTs registration
-            # All downstream steps depend on this either directly (via transform
-            # matrix / inverse_warped) or indirectly (via sentinel chain).
-            reg = workflow.add(
-                _task_register(
-                    input_image=input_image,
-                    template_phantom=template_phantom,
-                    output_prefix=output_prefix,
-                ),
-                name="registration",
-            )
-
-            # Step 1b: Save template in scanner space
-            # Natural data dependency on reg.inverse_warped ensures ordering.
-            workflow.add(
-                _task_save_scanner_space_template(
-                    inverse_warped=reg.inverse_warped,
-                    output_path=str(
-                        output_dir / "TemplatePhantom_ScannerSpace.nii.gz"
-                    ),
-                ),
-                name="save_scanner_space_template",
-            )
-
-            # Step 2: Transform vials to subject space
-            # Natural data dependency on reg.transform ensures ordering.
-            vials = workflow.add(
-                _task_transform_vials(
-                    vial_masks=vial_masks,
-                    reference_image=input_image,
-                    transform_matrix=reg.transform,
-                    output_vial_dir=str(vial_dir),
-                    tmp_vial_dir=str(output_dir / "tmp_vials"),
-                ),
-                name="transform_vials",
-            )
-
-            # Step 3: Extract metrics from all contrasts
-            # Natural data dependency on vials.vial_paths ensures Step 2 → Step 3.
-            metrics = workflow.add(
-                _task_extract_metrics(
-                    contrast_files=contrast_files,
-                    vial_paths=vials.vial_paths,
-                    adc_vials=adc_vials,
-                    output_metrics_dir=str(metrics_dir),
-                    session_name=session_name,
-                    tmp_vols_dir=str(output_dir / "tmp_vols"),
-                ),
-                name="extract_metrics",
-            )
-
-            # Step 4: Generate plots
-            # metrics.sentinel is a dummy dependency that enforces Step 3 → Step 4.
-            plots = workflow.add(
-                _task_generate_plots(
-                    contrast_files=contrast_files,
-                    metrics_dir=str(metrics_dir),
-                    vial_dir=str(vial_dir),
-                    session_name=session_name,
-                    phantom_name=phantom_name,
-                    template_dir=template_dir_parent,
-                    metrics_sentinel=metrics.sentinel,
-                ),
-                name="generate_plots",
-            )
-
-            # Step 5: Forward-transform all contrasts to template space
-            # Natural data dependency on reg.transform ensures Step 1 → Step 5.
-            # Independent of Steps 2–4, so may run in parallel with them.
-            template_contrasts = workflow.add(
-                _task_transform_contrasts(
-                    contrast_files=contrast_files,
-                    transform_matrix=reg.transform,
-                    template_phantom=template_phantom,
-                    output_dir=str(images_template_space_dir),
-                    tmp_dir=str(tmp_dir / "template_space_contrasts"),
-                ),
-                name="transform_contrasts",
-            )
-
-            # Step 6: Cleanup
-            # plots.sentinel and template_contrasts.sentinel are dummy dependencies
-            # that enforce Steps 4+5 → Step 6, preventing cleanup from running
-            # before all processing is complete.
-            cleanup = workflow.add(
-                _task_cleanup(
-                    dirs_to_remove=[
-                        str(tmp_dir),
-                        str(output_dir / "tmp_vials"),
-                        str(output_dir / "tmp_vols"),
-                        str(vial_dir / "tmp"),
-                    ],
-                    sentinel_plots=plots.sentinel,
-                    sentinel_template=template_contrasts.sentinel,
-                ),
-                name="cleanup",
-            )
-
-            return cleanup.out
-
-        # Unique class name prevents Pydra cache collisions across sessions
-        PhantomSessionWf.__name__ = f"PhantomSessionWf_{session_name}"
-        PhantomSessionWf.__qualname__ = f"PhantomSessionWf_{session_name}"
-
-        wf = PhantomSessionWf(x=1)
+        wf = PhantomSessionWf(
+            input_image=input_image,
+            template_phantom=str(self.template_phantom),
+            vial_masks=[str(m) for m in self.vial_masks],
+            adc_vials=list(self.adc_vials),
+            output_prefix=str(tmp_dir / f"{session_name}_Transformed_"),
+            output_dir_str=str(output_dir),
+            session_name=session_name,
+            phantom_name=self.phantom_name,
+            template_dir_parent=str(self.template_dir.parent),
+            contrast_files=contrast_files,
+        )
         cache_dir = str(output_dir / ".pydra_cache")
         with Submitter(worker="cf", cache_root=cache_dir) as sub:
             sub(wf, rerun=True)

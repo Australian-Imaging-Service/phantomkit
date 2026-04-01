@@ -387,7 +387,6 @@ def run_pipeline(
         run_stage3,
         print_header,
         TEMPLATE_DATA_ROOT,
-        ROTATIONS_FILE,
     )
     import concurrent.futures
     import threading
