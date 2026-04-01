@@ -1,8 +1,6 @@
 {
     "vials": ["E", "F", "G", "H", "I", "J", "K", "L"],
-    "phantom_diameter_mm": 191,
-    "mask_erosion_mm": 8,
-    "adc_mm2_per_s": {
+"adc_mm2_per_s": {
         "E": 1.82e-3,
         "F": 1.59e-3,
         "G": 1.37e-3,
