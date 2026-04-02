@@ -27,7 +27,7 @@ Usage:
 
 Notes:
     - Temperature estimation uses ADC only (most sensitive and monotonic parameter).
-    - T1 and T2 are shown in the plot but not used for estimation.
+    - T1 and T2 are present in the parsed data but not plotted or used for estimation.
     - ADC units are auto-detected: values < 0.1 treated as mm²/s and converted to 10⁻³ mm²/s.
 """
 
@@ -81,7 +81,7 @@ class TemperatureEstimate:
             )
             lines.append(
                 f"  (degree-{e.poly_degree} poly, fit residual = {e.fit_residual:.4g}, "
-                f"cal. range {e.t_range[0]:.0f}–{e.t_range[1]:.0f} °C)"
+                f"valid T range {e.t_range[0]:.0f}–{e.t_range[1]:.0f} °C)"
             )
         else:
             lines.append("  No estimate available.")
@@ -493,7 +493,9 @@ _CSS = """
     display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text2);
     background: var(--bg2); border: 0.5px solid var(--border);
     border-radius: var(--radius); padding: 4px 10px;
+    cursor: pointer; user-select: none; transition: opacity 0.15s;
   }
+  .legend-item.off { opacity: 0.3; }
   .vial-badge {
     display: inline-flex; align-items: center; justify-content: center;
     width: 20px; height: 20px; border-radius: 50%;
@@ -544,6 +546,10 @@ function baseOpts() {
            title: { display: true, text: "Temperature (°C)", color: tick, font: { size: 11 } },
            ticks: { color: tick, font: { size: 11 } }, grid: { color: grid } },
       y: { ticks: { color: tick, font: { size: 11 } }, grid: { color: grid } }
+    },
+    zoom: {
+      zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "xy" },
+      pan:  { enabled: true, mode: "xy" },
     }
   };
 }
@@ -569,11 +575,13 @@ def build_html(formulations: dict) -> str:
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MRI Calibration Plotter</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/1.2.1/chartjs-plugin-zoom.min.js"></script>
 <style>{_CSS}</style>
 </head>
 <body>
 <h1>MRI Calibration — GSP / PVP Phantom</h1>
-<p class="subtitle">ADC, T1 and T2 vs temperature · error bars = ±1× uncertainty</p>
+<p class="subtitle">ADC vs temperature · error bars = ±1× uncertainty · dashed line = polynomial fit · scroll to zoom · drag to pan · double-click to reset</p>
 
 <div class="controls">
   <div class="ctrl">
@@ -603,16 +611,7 @@ def build_html(formulations: dict) -> str:
     <div class="chart-unit">10⁻³ mm²/s</div>
     <div class="chart-wrap" style="height:320px"><canvas id="chartD"></canvas></div>
   </div>
-  <div class="chart-card">
-    <div class="chart-title">T1 Relaxation Time</div>
-    <div class="chart-unit">ms</div>
-    <div class="chart-wrap"><canvas id="chartT1"></canvas></div>
-  </div>
-  <div class="chart-card">
-    <div class="chart-title">T2 Relaxation Time</div>
-    <div class="chart-unit">ms</div>
-    <div class="chart-wrap"><canvas id="chartT2"></canvas></div>
-  </div>
+
 </div>
 
 <div class="stats-section">
@@ -620,7 +619,7 @@ def build_html(formulations: dict) -> str:
   <table class="stats-table">
     <thead><tr>
       <th>Formulation</th><th>Temp (°C)</th>
-      <th>ADC (10⁻³ mm²/s)</th><th>T1 (ms)</th><th>T2 (ms)</th>
+      <th>ADC (10⁻³ mm²/s)</th>
     </tr></thead>
     <tbody id="statsBody"></tbody>
   </table>
@@ -653,12 +652,14 @@ document.getElementById("fitMode").addEventListener("change", updateAll);
 {_BASE_OPTS_JS}
 
 function makeChart(id) {{
-  return new Chart(document.getElementById(id).getContext("2d"), {{
+  const c = new Chart(document.getElementById(id).getContext("2d"), {{
     type: "line", data: {{ datasets: [] }}, options: baseOpts(), plugins: [errorBarPlugin],
   }});
+  document.getElementById(id).addEventListener("dblclick", () => c.resetZoom());
+  return c;
 }}
 
-const charts = {{ D: makeChart("chartD"), T1: makeChart("chartT1"), T2: makeChart("chartT2") }};
+const charts = {{ D: makeChart("chartD") }};
 
 function datasetsForParam(param, errMult, showFit) {{
   const ds = [];
@@ -696,10 +697,8 @@ function datasetsForParam(param, errMult, showFit) {{
 function updateAll() {{
   const errMult = parseFloat(document.getElementById("errMode").value);
   const showFit = document.getElementById("fitMode").value === "1";
-  ["D", "T1", "T2"].forEach(p => {{
-    charts[p].data.datasets = datasetsForParam(p, errMult, showFit);
-    charts[p].update();
-  }});
+  charts.D.data.datasets = datasetsForParam("D", errMult, showFit);
+  charts.D.update();
   updateStats();
 }}
 
@@ -713,9 +712,7 @@ function updateStats() {{
     tr.innerHTML = `
       <td><span class="swatch" style="background:${{COLOURS[name]}}"></span>${{name}}</td>
       <td>${{c.temperature.toFixed(1)}}</td>
-      <td>${{c.D_val?.toFixed(4) ?? "—"}} <span class="muted">± ${{c.D_unc?.toFixed(4) ?? "?"}}</span></td>
-      <td>${{c.T1_val?.toFixed(1) ?? "—"}} <span class="muted">± ${{c.T1_unc?.toFixed(1) ?? "?"}}</span></td>
-      <td>${{c.T2_val?.toFixed(1) ?? "—"}} <span class="muted">± ${{c.T2_unc?.toFixed(1) ?? "?"}}</span></td>`;
+      <td>${{c.D_val?.toFixed(4) ?? "—"}} <span class="muted">± ${{c.D_unc?.toFixed(4) ?? "?"}}</span></td>`;
     tbody.appendChild(tr);
   }});
 }}
@@ -795,11 +792,13 @@ def build_vials_html(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MRI Calibration — {phantom_name} Vial Temperature Estimates</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/hammer.js/2.0.8/hammer.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chartjs-plugin-zoom/1.2.1/chartjs-plugin-zoom.min.js"></script>
 <style>{_CSS}</style>
 </head>
 <body>
 <h1>MRI Calibration — {phantom_name + " " if phantom_name else ""}Vial Temperature Estimates</h1>
-<p class="subtitle">ADC calibration curves with measured vial values overlaid</p>
+<p class="subtitle">ADC calibration curves with measured vial values overlaid · scroll to zoom · drag to pan · double-click to reset</p>
 
 <div class="controls">
   <div class="ctrl">
@@ -851,8 +850,10 @@ NAMES.forEach(name => {{
   chipsEl.appendChild(chip);
 }});
 
-// Vial legend
+// Vial legend — toggleable chips
 const legEl = document.getElementById("vialLegend");
+let activeVials = new Set(VIALS.map(v => v.vial));
+
 VIALS.forEach(v => {{
   const item = document.createElement("div");
   item.className = "legend-item";
@@ -861,6 +862,11 @@ VIALS.forEach(v => {{
     `${{v.formulation}} &nbsp;·&nbsp; ${{v.adc.toFixed(4)}} &nbsp;→&nbsp; ` +
     `<strong>${{v.T.toFixed(2)}} °C</strong>` +
     `<span class="muted">&nbsp;± ${{v.T_unc.toFixed(2)}}</span>`;
+  item.addEventListener("click", () => {{
+    if (activeVials.has(v.vial)) {{ activeVials.delete(v.vial); item.classList.add("off"); }}
+    else {{ activeVials.add(v.vial); item.classList.remove("off"); }}
+    chart.update();   // triggers crosshairPlugin redraw
+  }});
   legEl.appendChild(item);
 }});
 
@@ -877,7 +883,7 @@ const crosshairPlugin = {{
     const top = yAx.top, bottom = yAx.bottom;
     const left = xAx.left, right = xAx.right;
 
-    VIALS.forEach(v => {{
+    VIALS.filter(v => activeVials.has(v.vial)).forEach(v => {{
       const xPx = xAx.getPixelForValue(v.T);
       const yPx = yAx.getPixelForValue(v.adc);
       if (xPx < left || xPx > right || yPx < top || yPx > bottom) return;
@@ -933,6 +939,7 @@ const chart = new Chart(document.getElementById("chartD").getContext("2d"), {{
   options: baseOpts(),
   plugins: [errorBarPlugin, crosshairPlugin],
 }});
+document.getElementById("chartD").addEventListener("dblclick", () => chart.resetZoom());
 
 function updateChart() {{
   const ds = [];
