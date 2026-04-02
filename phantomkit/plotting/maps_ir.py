@@ -13,6 +13,8 @@ Key outputs:
 ================================================================================
 """
 
+import matplotlib
+
 import logging
 import os
 import re
@@ -23,12 +25,20 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import curve_fit
 
+matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
+# in a background thread (e.g. ThreadPoolExecutor on macOS)
+
 logger = logging.getLogger(__name__)
 
 
 def find_csv_file(metric_dir, contrast_name, suffix):
     """
     Find a CSV file in a directory that matches the contrast name and suffix.
+
+    Uses an exact token match: the contrast_name must appear in the filename
+    immediately followed by the suffix (no extra characters between them).
+    This prevents ambiguous substring hits such as 'se_ir_100' matching
+    'se_ir_1000_mean_matrix.csv' or 'se_ir_50' matching 'se_ir_500_mean_matrix.csv'.
 
     Args:
         metric_dir: Directory containing CSV files
@@ -41,8 +51,9 @@ def find_csv_file(metric_dir, contrast_name, suffix):
     Raises:
         FileNotFoundError: If no matching file is found
     """
+    exact_tail = contrast_name + suffix
     for f in os.listdir(metric_dir):
-        if contrast_name in f and f.endswith(suffix):
+        if f.endswith(exact_tail):
             return os.path.join(metric_dir, f)
     raise FileNotFoundError(
         f"No CSV file found for contrast '{contrast_name}' with suffix '{suffix}' in {metric_dir}"
@@ -509,29 +520,14 @@ def plot_vial_ir_means_std(
     return os.path.abspath(output_file)
 
 
-@click.command()
+@click.command("maps-ir")
 @click.argument("contrast_files", nargs=-1, required=True)
-@click.option(
-    "-m",
-    "--metric_dir",
-    required=True,
-    help="Directory containing the mean/std CSV files.",
-)
-@click.option(
-    "-o",
-    "--output",
-    default="vial_summary_T1.png",
-    show_default=True,
-    help="Output filename for the plot.",
-)
-@click.option("--annotate", is_flag=True, help="Annotate each point with mean ± std.")
-@click.option(
-    "--roi_image",
-    default=None,
-    help="Path to ROI overlay PNG image for the extra subplot.",
-)
+@click.option("-m", "--metric-dir", required=True, help="Directory with mean/std CSVs.")
+@click.option("-o", "--output", default="vial_summary_T1.png", show_default=True)
+@click.option("--annotate", is_flag=True, default=False)
+@click.option("--roi-image", default=None)
 def main(contrast_files, metric_dir, output, annotate, roi_image):
-    """Plot vial mean ± std for inversion recovery with T₁ fitting and save fit metrics."""
+    """Plot vial mean ± std for inversion recovery with T1 fitting."""
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     plot_vial_ir_means_std(
         list(contrast_files),
