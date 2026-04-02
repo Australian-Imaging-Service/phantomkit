@@ -91,6 +91,10 @@ def _find_dwi_processing_script() -> Path:
 
 DWI_SCRIPT = _find_dwi_processing_script()
 
+CALIBRATION_PLOTTER_SCRIPT = Path(__file__).resolve().parent / "plotting" / "calibration_plotter.py"
+CALIBRATION_LUT = TEMPLATE_DATA_ROOT / "DIFFUSION-O-3574_Calibration_GSP_PVP_20220331.xlsx"
+PHANTOM_CONFIG = TEMPLATE_DATA_ROOT / "phantom_config.json"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -291,6 +295,63 @@ def run_stage2(
         print()
 
     print("  Stage 2 complete.\n")
+
+
+# ---------------------------------------------------------------------------
+# Calibration plotter: temperature estimation from vial ADC values
+# ---------------------------------------------------------------------------
+
+
+def run_calibration_plot(
+    dwi_output_dirs: list,
+    output_dir: Path,
+    phantom: str,
+    dry_run: bool,
+):
+    """
+    For each processed DWI series, run the calibration plotter in vials mode
+    to estimate vial temperatures from the ADC_mean_matrix.csv produced by
+    Stage 2.  Output HTML is written to <series>/plots/.
+    """
+    print_header("STAGE 4 — Calibration Temperature Estimation")
+
+    if not dwi_output_dirs:
+        print("  No DWI output directories — skipping calibration plots.\n")
+        return
+
+    for dwi_dir in dwi_output_dirs:
+        session_name = dwi_dir.name
+        metrics_dir = output_dir / session_name / "metrics"
+        adc_csv = metrics_dir / f"{session_name}_ADC_mean_matrix.csv"
+        output_html = metrics_dir / f"{phantom}_vial_temperature_estimates.html"
+
+        if not adc_csv.exists():
+            print(f"  WARNING: ADC CSV not found for {session_name} — skipping.")
+            print(f"    Expected: {adc_csv}\n")
+            continue
+
+        print(f"  Series:  {session_name}")
+        print(f"  ADC CSV: {adc_csv}")
+        print(f"  Output:  {output_html}")
+
+        if dry_run:
+            print("  [DRY RUN] Would run calibration plotter.\n")
+            continue
+
+        cmd = [
+            sys.executable,
+            str(CALIBRATION_PLOTTER_SCRIPT),
+            "vials",
+            str(CALIBRATION_LUT),
+            str(adc_csv),
+            str(PHANTOM_CONFIG),
+            "--phantom", phantom,
+            "--output", str(output_html),
+        ]
+        run_cmd(cmd, f"Calibration plotter ({session_name})")
+        print()
+
+    print("  Stage 4 complete.\n")
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +626,10 @@ def main():
         f"  Stage 3 (phantom QC, native T1):  "
         f"{'YES' if run_stage3_flag else 'NO (no T1/IR/TE found)'}"
     )
+    print(
+        f"  Stage 4 (calibration temp. est.): "
+        f"{'YES (runs per DWI series)' if run_stage1_flag else 'NO'}"
+    )
     print()
 
     if args.dry_run:
@@ -589,6 +654,13 @@ def main():
         run_stage2(dwi_output_dirs, output_dir, template_dir, args.dry_run)
     else:
         print_header("STAGE 2 — Phantom QC in DWI Space")
+        print("  Skipped: Stage 1 did not run.\n")
+
+    # Stage 4 — Calibration temperature estimation (follows Stage 2)
+    if run_stage1_flag:
+        run_calibration_plot(dwi_output_dirs, output_dir, phantom, args.dry_run)
+    else:
+        print_header("STAGE 4 — Calibration Temperature Estimation")
         print("  Skipped: Stage 1 did not run.\n")
 
     # Stage 3 — Phantom QC on native contrasts

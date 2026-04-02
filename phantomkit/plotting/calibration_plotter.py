@@ -539,17 +539,17 @@ function baseOpts() {
     responsive: true, maintainAspectRatio: false,
     plugins: {
       legend: { display: false },
-      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(4)}` } }
+      tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(4)}` } },
+      zoom: {
+        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "xy" },
+        pan:  { enabled: true, mode: "xy" },
+      }
     },
     scales: {
       x: { type: "linear",
            title: { display: true, text: "Temperature (°C)", color: tick, font: { size: 11 } },
            ticks: { color: tick, font: { size: 11 } }, grid: { color: grid } },
       y: { ticks: { color: tick, font: { size: 11 } }, grid: { color: grid } }
-    },
-    zoom: {
-      zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "xy" },
-      pan:  { enabled: true, mode: "xy" },
     }
   };
 }
