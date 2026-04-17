@@ -8,12 +8,12 @@ BatchWorkflow runs multiple sessions in parallel.
 import logging
 from pathlib import Path
 
-from fileformats.generic import Directory, File
+from fileformats.generic import Directory
 from fileformats.medimage import NiftiGz
 from pydra.compose import python, workflow
 
 from phantomkit.registration import (
-    IterativeRegistration,
+    RegisterToTemplate,
     SaveTemplateInScannerSpace,
 )
 from phantomkit.metrics import (
@@ -139,7 +139,7 @@ def GetVialMasks(template_dir: Directory) -> list[NiftiGz]:
     """
     from pathlib import Path as _Path
 
-    return sorted((_Path(template_dir) / "VialsLabelled").glob("*.nii.gz"))
+    return sorted((_Path(template_dir) / "vials_labelled").glob("*.nii.gz"))
 
 
 @python.define
@@ -186,15 +186,13 @@ def GetContrastFiles(input_image: NiftiGz) -> list[NiftiGz]:
 def VialSignalAnalysis(
     input_image: NiftiGz,
     template_dir: Directory,
-    rotation_library_file: File,
     output_base_dir: Path | None = None,
 ) -> tuple[Directory, Directory, Directory, NiftiGz]:
     """
-    Pydra workflow for processing a single GSP SPIRIT phantom MRI session.
+    Pydra workflow for processing a single phantom MRI session.
 
-    Registers the phantom scan to the GSP SPIRIT template using iterative ANTs
-    SyN registration with an orientation search, extracts per-vial signal
-    statistics for all contrast images, and generates publication-quality plots.
+    Registers the phantom scan to the template using ANTs rigid SyN, extracts
+    per-vial signal statistics for all contrast images, and generates plots.
 
     Parameters
     ----------
@@ -202,12 +200,9 @@ def VialSignalAnalysis(
         Path to the primary NIfTI image for the session (e.g. the T1 MPRAGE).
         All NIfTI files in the same directory are treated as contrast images.
     template_dir : Directory
-        Path to the GSP SPIRIT template directory.  Must contain
-        ``ImageTemplate.nii.gz`` and a ``VialsLabelled/`` sub-directory of
+        Path to the phantom template directory.  Must contain
+        ``ImageTemplate.nii.gz`` and a ``vials_labelled/`` sub-directory of
         per-vial mask files.
-    rotation_library_file : File
-        Path to a text file listing quoted ANTs rotation strings, one per line,
-        used during the iterative orientation search.
     output_base_dir : Path, optional
         Root output directory.  A sub-directory named after the session
         (parent folder of *input_image*) is created automatically.
@@ -231,18 +226,12 @@ def VialSignalAnalysis(
     1. **PrepareSessionPaths**  — derive output paths and create directories
     2. **GetVialMasks**         — list template vial mask files
     3. **GetContrastFiles**     — list all contrast NIfTI files in the session
-    4. **IterativeRegistration** — iterative ANTs registration with orientation
-       search (RegistrationSynN + CheckRegistration + MrTransform)
+    4. **RegisterToTemplate**   — ANTs rigid SyN registration
     5. **SaveTemplateInScannerSpace** — warp template back to subject space
-       (MrConvert or MrTransform)
     6. **TransformVialsToSubjectSpace** — project vial masks into subject space
-       (ApplyTransforms + MrTransform/MrConvert)
     7. **ExtractMetricsFromContrasts** — compute per-vial statistics; writes CSVs
-       (MrGrid + MrConvert + MrStats)
     8. **TransformContrastsToTemplateSpace** — forward-warp all contrasts
-       (MrTransform + MrGrid + ApplyTransforms)
     9. **GeneratePlots** — scatter and parametric map plots
-       (MrGrid for ROI overlays, external Python scripts for plots)
     10. **Cleanup** — remove temporary directories
     """
     template_phantom = Path(template_dir) / "ImageTemplate.nii.gz"
@@ -266,22 +255,18 @@ def VialSignalAnalysis(
     )
 
     reg = workflow.add(
-        IterativeRegistration(
+        RegisterToTemplate(
             input_image=input_image,
             template_phantom=template_phantom,
-            rotation_library_file=rotation_library_file,
-            vial_masks=vial_masks.out,
             session_name=paths.session_name,
             tmp_dir=paths.tmp_dir,
         ),
-        name="iterative_registration",
+        name="registration",
     )
 
     scanner_template = workflow.add(
         SaveTemplateInScannerSpace(
             inverse_warped=reg.inverse_warped,
-            rotation_matrix_file=reg.rotation_matrix_file,
-            iteration=reg.iteration,
             output_path=paths.scanner_space_image,
         ),
         name="save_template_scanner_space",
@@ -292,8 +277,6 @@ def VialSignalAnalysis(
             vial_masks=vial_masks.out,
             reference_image=input_image,
             transform_matrix=reg.transform,
-            rotation_matrix_file=reg.rotation_matrix_file,
-            iteration=reg.iteration,
             output_vial_dir=paths.vial_dir,
         ),
         name="transform_vials",
@@ -313,8 +296,6 @@ def VialSignalAnalysis(
         TransformContrastsToTemplateSpace(
             contrast_files=contrast_files.out,
             transform_matrix=reg.transform,
-            rotation_matrix_file=reg.rotation_matrix_file,
-            iteration=reg.iteration,
             template_phantom=template_phantom,
             tmp_dir=paths.tmp_dir,
             output_dir=paths.images_template_space_dir,
@@ -350,7 +331,6 @@ def VialSignalAnalysisBatch(
     input_images: list[NiftiGz],
     template_dir: Directory,
     output_base_dir: Path,
-    rotation_library_file: File,
 ) -> list:
     """
     Pydra workflow for batch-processing multiple phantom sessions in parallel.
@@ -364,14 +344,11 @@ def VialSignalAnalysisBatch(
         One primary NIfTI image per session.  All NIfTI files in each image's
         parent directory are automatically included as contrast images.
     template_dir : Directory
-        Path to the shared GSP SPIRIT template directory, passed unchanged to
-        each :func:`VialSignalAnalysis` invocation.
+        Path to the phantom template directory, passed unchanged to each
+        :func:`VialSignalAnalysis` invocation.
     output_base_dir : Path
         Shared root output directory.  Each session receives its own
         sub-directory named after its parent folder.
-    rotation_library_file : File
-        Path to the rotation library text file, passed unchanged to each
-        :func:`VialSignalAnalysis` invocation.
 
     Returns
     -------
@@ -392,7 +369,6 @@ def VialSignalAnalysisBatch(
             input_image=input_images,
             template_dir=template_dir,
             output_base_dir=output_base_dir,
-            rotation_library_file=rotation_library_file,
         )
         .split("input_image")
         .combine("input_image"),

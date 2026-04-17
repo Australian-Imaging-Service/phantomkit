@@ -14,7 +14,7 @@ from fileformats.generic import File
 from fileformats.medimage import NiftiGz
 from pydra.compose import python, workflow
 from pydra.tasks.ants.v2.resampling.apply_transforms import ApplyTransforms
-from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrInfo, MrStats, MrTransform
+from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrInfo, MrStats
 
 from phantomkit.registration import ParseMrStatsStdout
 
@@ -83,8 +83,6 @@ def TransformVialsToSubjectSpace(
     vial_masks: list[NiftiGz],
     reference_image: NiftiGz,
     transform_matrix: File,
-    rotation_matrix_file: File | None,
-    iteration: int,
     output_vial_dir: Path,
 ) -> list[NiftiGz]:
     """
@@ -94,8 +92,7 @@ def TransformVialsToSubjectSpace(
     1. **PrepVialTransformPaths** derives per-vial output paths.
     2. **ApplyTransforms** applies the inverse affine.
     3. **CopyFile** moves the output to the per-vial tmp path.
-    4. **MrTransform** (inverse rotation, iteration > 1) or **MrConvert**
-       (copy, iteration == 1) writes the final output.
+    4. **MrConvert** writes the final output.
 
     A combined **GatherList** collects all per-vial output paths.
     """
@@ -122,28 +119,15 @@ def TransformVialsToSubjectSpace(
         name="copy",
     )
 
-    if iteration > 1 and rotation_matrix_file:
-        final = workflow.add(
-            MrTransform(
-                in_file=copy.out,
-                linear=rotation_matrix_file,
-                out_file=prep.output_path,
-                interp="nearest",
-                inverse=True,
-                force=True,
-            ),
-            name="final",
-        )
-    else:
-        final = workflow.add(
-            MrConvert(
-                in_file=copy.out,
-                out_file=prep.output_path,
-                quiet=True,
-                force=True,
-            ),
-            name="final",
-        )
+    final = workflow.add(
+        MrConvert(
+            in_file=copy.out,
+            out_file=prep.output_path,
+            quiet=True,
+            force=True,
+        ),
+        name="final",
+    )
 
     gather = workflow.add(
         GatherList(items=final.out_file).combine("prep"),
@@ -289,8 +273,6 @@ def ExtractMetricsFromContrasts(
 def TransformContrastsToTemplateSpace(
     contrast_files: list[NiftiGz],
     transform_matrix: File,
-    rotation_matrix_file: File | None,
-    iteration: int,
     template_phantom: NiftiGz,
     tmp_dir: Path,
     output_dir: Path,
@@ -299,14 +281,11 @@ def TransformContrastsToTemplateSpace(
     Forward-transform every contrast image into template space.
 
     For each contrast:
-    1. If ``iteration > 1``, **MrTransform** applies the pre-registration
-       rotation (concrete workflow input → evaluated at static-graph-build
-       time).
-    2. **MrInfo** + **ParseMrInfoSize** detect dimensionality (task outputs
+    1. **MrInfo** + **ParseMrInfoSize** detect dimensionality (task outputs
        are concrete at runtime after the for-loop triggers the fallback).
-    3. If single-slice, **MrGrid** pads the z-axis.
-    4. **ApplyTransforms** applies the forward ANTs affine.
-    5. **CopyFile** writes the result to the output directory.
+    2. If single-slice, **MrGrid** pads the z-axis.
+    3. **ApplyTransforms** applies the forward ANTs affine.
+    4. **CopyFile** writes the result to the output directory.
 
     Returns the template-space output directory path.
     """
@@ -322,23 +301,8 @@ def TransformContrastsToTemplateSpace(
         contrast_name = contrast_path.stem.replace(".nii", "")
         logger.info("Transforming: %s", contrast_path.name)
 
-        source = contrast_file
-
-        if iteration > 1 and rotation_matrix_file:
-            rot = workflow.add(
-                MrTransform(
-                    in_file=contrast_file,
-                    linear=rotation_matrix_file,
-                    out_file=f"{contrast_name}_rotated.nii.gz",
-                    interp="linear",
-                    force=True,
-                ),
-                name=f"rotate_{contrast_name}",
-            )
-            source = rot.out_file
-
         info = workflow.add(
-            MrInfo(image_=[source], size=True, quiet=True),
+            MrInfo(image_=[contrast_file], size=True, quiet=True),
             name=f"info_{contrast_name}",
         )
         parse_size = workflow.add(
@@ -346,12 +310,12 @@ def TransformContrastsToTemplateSpace(
             name=f"parse_size_{contrast_name}",
         )
 
-        transform_input = source
+        transform_input = contrast_file
 
         if parse_size.is_single_slice:
             pad = workflow.add(
                 MrGrid(
-                    in_file=source,
+                    in_file=contrast_file,
                     operation="pad",
                     axis=[(2, (1, 1))],
                     out_file=f"{contrast_name}_padded.nii.gz",
