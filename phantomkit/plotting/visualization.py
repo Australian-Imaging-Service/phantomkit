@@ -195,13 +195,23 @@ def GeneratePlots(
     metrics_dir: Path,
     vial_dir: Path,
     session_name: str,
+    output_format: str = "html",
 ) -> None:
     """
     Generate per-contrast vial intensity scatter plots and parametric map
     plots (IR/TE) using the plotting API functions directly as pydra tasks.
 
-    Vial mask overlays are built using MrGrid + MrCat + MrMath pydra tasks.
-    Screenshots use mrview via MrView.
+    In HTML mode (default): NIfTI paths are passed directly to the plotting
+    functions for NiiVue embedding; mrview screenshots are skipped.
+
+    In PNG mode: Vial mask overlays are built using MrGrid + MrCat + MrMath
+    pydra tasks and mrview captures screenshots as before.
+
+    Parameters
+    ----------
+    output_format : str
+        "html" (default) — interactive HTML output, no mrview required.
+        "png"            — static matplotlib PNG, mrview used for ROI overlay.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -214,6 +224,11 @@ def GeneratePlots(
     )
 
     metrics_path = _Path(metrics_dir)
+    csv_dir = metrics_path / "csv"
+    plots_dir = metrics_path / "plots"
+    fits_dir = metrics_path / "fits"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    fits_dir.mkdir(parents=True, exist_ok=True)
     vial_path = _Path(vial_dir)
     tmp_vial_dir = vial_path / "tmp"
 
@@ -252,113 +267,170 @@ def GeneratePlots(
     for contrast_file in contrast_files:
         contrast_path = _Path(contrast_file)
         contrast_name = contrast_path.stem
-        mean_csv = str(metrics_path / f"{session_name}_{contrast_name}_mean_matrix.csv")
-        std_csv = str(metrics_path / f"{session_name}_{contrast_name}_std_matrix.csv")
+        mean_csv = str(csv_dir / f"{contrast_name}_mean_matrix.csv")
+        std_csv = str(csv_dir / f"{contrast_name}_std_matrix.csv")
         if not _Path(mean_csv).exists():
             continue
 
-        output_plot = str(
-            metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
-        )
+        # Output filename: .html or .png depending on format
+        _ext = ".html" if output_format == "html" else ".png"
+        output_plot = str(plots_dir / f"{contrast_name}{_ext}")
 
         contrast_type = _classify_contrast(contrast_path.stem)
         intensity_range_str = _intensity_range_for(contrast_type)
 
-        roi_image: File | None = None
-        if vial_masks_list:
-            overlay = workflow.add(
-                BuildRoiOverlay(
-                    vial_masks=vial_masks_list,
-                    reference_image=contrast_file,
-                    prefix=contrast_name,
-                    tmp_dir=tmp_vial_dir,
+        if output_format == "html":
+            _vial_niftis_scatter = {
+                p.name.replace(".nii.gz", "").replace(".nii", ""): str(p)
+                for p in vial_masks_list
+            }
+            workflow.add(
+                python.define(plot_vial_intensity)(
+                    csv_file=mean_csv,
+                    plot_type="scatter",
+                    std_csv=std_csv,
+                    roi_image=None,
+                    output=output_plot,
+                    phantom=None,
+                    template_dir=_template_data_root,
+                    output_format="html",
+                    nifti_image=str(contrast_path),
+                    vial_niftis=_vial_niftis_scatter,
                 ),
-                name=f"overlay_{contrast_name}",
+                name=f"scatter_{contrast_name}",
             )
-            screenshot = workflow.add(
-                MrView(
-                    image=contrast_file,
-                    roi_load=overlay.out,
-                    roi_colour="1,0,0",
-                    roi_opacity=1.0,
-                    comments=0,
-                    noannotations=True,
-                    fullscreen=True,
-                    intensity_range=intensity_range_str,
-                    capture_folder=tmp_vial_dir,
-                    capture_prefix=f"{contrast_name}_roi_overlay",
-                ),
-                name=f"screenshot_{contrast_name}",
-            )
-            roi_image = screenshot.out_png
+        else:
+            # PNG mode: build ROI overlay and capture mrview screenshot
+            roi_image: File | None = None
+            if vial_masks_list:
+                overlay = workflow.add(
+                    BuildRoiOverlay(
+                        vial_masks=vial_masks_list,
+                        reference_image=contrast_file,
+                        prefix=contrast_name,
+                        tmp_dir=tmp_vial_dir,
+                    ),
+                    name=f"overlay_{contrast_name}",
+                )
+                screenshot = workflow.add(
+                    MrView(
+                        image=contrast_file,
+                        roi_load=overlay.out,
+                        roi_colour="1,0,0",
+                        roi_opacity=1.0,
+                        comments=0,
+                        noannotations=True,
+                        fullscreen=True,
+                        intensity_range=intensity_range_str,
+                        capture_folder=tmp_vial_dir,
+                        capture_prefix=f"{contrast_name}_roi_overlay",
+                    ),
+                    name=f"screenshot_{contrast_name}",
+                )
+                roi_image = screenshot.out_png
 
-        # Determine phantom name from metrics_dir path structure:
-        # <output_dir>/<session>/metrics/ — we don't know phantom here,
-        # so pass None and let plot_vial_intensity skip ADC reference if absent.
-        # For ADC mode to work fully, callers should use PhantomProcessor directly.
-        workflow.add(
-            python.define(plot_vial_intensity)(
-                csv_file=mean_csv,
-                plot_type="scatter",
-                std_csv=std_csv,
-                roi_image=roi_image,
-                output=output_plot,
-                phantom=None,
-                template_dir=_template_data_root,
-            ),
-            name=f"scatter_{contrast_name}",
-        )
+            workflow.add(
+                python.define(plot_vial_intensity)(
+                    csv_file=mean_csv,
+                    plot_type="scatter",
+                    std_csv=std_csv,
+                    roi_image=roi_image,
+                    output=output_plot,
+                    phantom=None,
+                    template_dir=_template_data_root,
+                    output_format="png",
+                ),
+                name=f"scatter_{contrast_name}",
+            )
 
     # Parametric map plots (IR and TE)
     def _matches(stem: str, token: str) -> bool:
         return bool(_re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
 
-    for contrast_type, plot_fn, suffix in [
-        ("ir", plot_ir, "ir_map_PLOTmeanstd_T1mapping.png"),
-        ("te", plot_te, "TE_map_PLOTmeanstd_TEmapping.png"),
+    _mapping_names = {
+        "ir": ("T1_mapping", "T1_fits"),
+        "te": ("T2_mapping", "T2_fits"),
+    }
+    # T1/MPRAGE image used as the viewer background across all map plots.
+    # Falls back to the first matching contrast if no T1 is found.
+    def _find_t1_bg() -> str | None:
+        for f in contrast_files:
+            if _re.search(r"t1|mprage", _Path(f).stem, _re.IGNORECASE):
+                return str(f)
+        return None
+
+    _t1_bg = _find_t1_bg()
+
+    for contrast_type, plot_fn in [
+        ("ir", plot_ir),
+        ("te", plot_te),
     ]:
         matching = [f for f in contrast_files if _matches(_Path(f).stem, contrast_type)]
         if not matching:
             continue
 
-        output_plot = str(metrics_path / f"{session_name}_{suffix}")
+        _ext = ".html" if output_format == "html" else ".png"
+        _plot_name, _fits_name = _mapping_names[contrast_type]
+        output_plot = str(plots_dir / f"{_plot_name}{_ext}")
+        _fits_output = str(fits_dir / f"{_fits_name}.csv")
 
-        roi_image_arg: File | None = None
-        if vial_masks_list:
-            overlay = workflow.add(
-                BuildRoiOverlay(
-                    vial_masks=vial_masks_list,
-                    reference_image=matching[0],
-                    prefix=contrast_type,
-                    tmp_dir=tmp_vial_dir,
+        if output_format == "html":
+            _vial_niftis = {
+                p.name.replace(".nii.gz", "").replace(".nii", ""): str(p)
+                for p in vial_masks_list
+            }
+            workflow.add(
+                python.define(plot_fn)(
+                    contrast_files=matching,
+                    metric_dir=str(csv_dir),
+                    output_file=output_plot,
+                    roi_image=None,
+                    output_format="html",
+                    fits_output=_fits_output,
+                    nifti_image=_t1_bg or str(matching[0]),
+                    vial_niftis=_vial_niftis,
                 ),
-                name=f"overlay_{contrast_type}",
+                name=f"map_plot_{contrast_type}",
             )
-            screenshot = workflow.add(
-                MrView(
-                    image=matching[0],
-                    roi_load=overlay.out,
-                    roi_colour="1,0,0",
-                    roi_opacity=1.0,
-                    comments=0,
-                    noannotations=True,
-                    fullscreen=True,
-                    capture_folder=tmp_vial_dir,
-                    capture_prefix=f"roi_overlay_{contrast_type}",
-                ),
-                name=f"screenshot_{contrast_type}",
-            )
-            roi_image_arg = screenshot.out_png
+        else:
+            roi_image_arg: File | None = None
+            if vial_masks_list:
+                overlay = workflow.add(
+                    BuildRoiOverlay(
+                        vial_masks=vial_masks_list,
+                        reference_image=matching[0],
+                        prefix=contrast_type,
+                        tmp_dir=tmp_vial_dir,
+                    ),
+                    name=f"overlay_{contrast_type}",
+                )
+                screenshot = workflow.add(
+                    MrView(
+                        image=matching[0],
+                        roi_load=overlay.out,
+                        roi_colour="1,0,0",
+                        roi_opacity=1.0,
+                        comments=0,
+                        noannotations=True,
+                        fullscreen=True,
+                        capture_folder=tmp_vial_dir,
+                        capture_prefix=f"roi_overlay_{contrast_type}",
+                    ),
+                    name=f"screenshot_{contrast_type}",
+                )
+                roi_image_arg = screenshot.out_png
 
-        workflow.add(
-            python.define(plot_fn)(
-                contrast_files=matching,
-                metric_dir=metrics_dir,
-                output_file=output_plot,
-                roi_image=roi_image_arg,
-            ),
-            name=f"map_plot_{contrast_type}",
-        )
+            workflow.add(
+                python.define(plot_fn)(
+                    contrast_files=matching,
+                    metric_dir=str(csv_dir),
+                    output_file=output_plot,
+                    roi_image=roi_image_arg,
+                    output_format="png",
+                    fits_output=_fits_output,
+                ),
+                name=f"map_plot_{contrast_type}",
+            )
 
 
 @python.define

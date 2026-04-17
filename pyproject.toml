@@ -23,6 +23,8 @@ dependencies = [
     "pydra-tasks-mrtrix3",
     "scipy >=1.10.0",
     "typing_extensions >=4.6.3; python_version < '4.0'",
+    "fastapi >=0.100",
+    "uvicorn[standard] >=0.23",
 ]
 
 authors = [

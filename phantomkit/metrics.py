@@ -271,10 +271,10 @@ def ExtractMetricsFromContrasts(
                 metrics_data["min"][vial_name].append(values[3])
                 metrics_data["max"][vial_name].append(values[4])
 
+        csv_dir = metrics_dir / "csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
         for metric_name, vial_data in metrics_data.items():
-            csv_file = (
-                metrics_dir / f"{session_name}_{contrast_name}_{metric_name}_matrix.csv"
-            )
+            csv_file = csv_dir / f"{contrast_name}_{metric_name}_matrix.csv"
             rows = [
                 {"vial": vn, **{f"{clean_name}_vol{i}": v for i, v in enumerate(vals)}}
                 for vn, vals in vial_data.items()

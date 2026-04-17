@@ -15,6 +15,10 @@ Plot mode is detected automatically from the csv_file filename:
     · Y-axis: Fractional Anisotropy, fixed range 0–1
 
   Generic   – all other filenames → standard intensity plot
+
+Output formats
+  html  (default) – interactive HTML with NiiVue MRI viewer and Chart.js plot
+  png             – static matplotlib figure (original behaviour)
 """
 
 import click
@@ -130,6 +134,212 @@ def build_adc_legend(has_measured: bool) -> list:
 
 
 # ---------------------------------------------------------------------------
+# HTML generation helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_vial_intensity_html(
+    *,
+    vials: list,
+    display_values: np.ndarray,
+    display_stds,
+    n_vols: int,
+    contrast_mode: str,
+    ref_data: dict | None,
+    plot_type: str,
+    phantom: str | None,
+    title: str,
+    y_label: str,
+    embedded_data: dict,
+    nifti_image: str | None = None,
+    vial_niftis: dict | None = None,
+) -> str:
+    """Build a self-contained HTML string for the vial intensity plot."""
+    from phantomkit.plotting._html_common import (
+        html_head,
+        ERROR_BAR_PLUGIN_JS,
+        base_opts_js,
+        phantomkit_data_tag,
+        chart_color,
+        _niivue_viewer_panel,
+    )
+    from pathlib import Path as _Path
+
+    _has_viewer = bool(nifti_image and _Path(nifti_image).exists())
+    if _has_viewer:
+        _adc_cal = contrast_mode == "adc"
+        # For ADC mode, only show the vials defined in the reference (E–L);
+        # the other vials are unrelated to ADC calibration.
+        _viewer_vials = dict(vial_niftis or {})
+        if _adc_cal and ref_data is not None:
+            _adc_set = {v.upper() for v in ref_data.get("vials", [])}
+            _viewer_vials = {k: v for k, v in _viewer_vials.items() if k.upper() in _adc_set}
+        elif _adc_cal:
+            _adc_set = {"E", "F", "G", "H", "I", "J", "K", "L"}
+            _viewer_vials = {k: v for k, v in _viewer_vials.items() if k.upper() in _adc_set}
+        viewer_html, viewer_js = _niivue_viewer_panel(
+            nifti_image,  # type: ignore[arg-type]
+            _viewer_vials,
+            bg_cal_min=0.0 if _adc_cal else None,
+            bg_cal_max=0.004 if _adc_cal else None,
+        )
+    else:
+        viewer_html = viewer_js = ""
+
+    # ---- Build Chart.js datasets -------------------------------------------
+    datasets = []
+    for vol_idx in range(n_vols):
+        means = display_values[:, vol_idx].tolist()
+        stds = (
+            display_stds[:, vol_idx].tolist()
+            if display_stds is not None
+            else None
+        )
+
+        if contrast_mode == "adc":
+            color = "#378ADD"  # blue filled circles for measured ADC
+            vol_label = f"Vol {vol_idx}" if n_vols > 1 else "Mean (SD) ADC"
+        else:
+            color = chart_color(vol_idx)
+            vol_label = f"Vol {vol_idx}"
+
+        scatter_ds = {
+            "label": vol_label,
+            "data": [{"x": j, "y": means[j]} for j in range(len(vials))],
+            "borderColor": color,
+            "backgroundColor": color + "33",
+            "pointBackgroundColor": color,
+            "pointRadius": 5,
+            "pointHoverRadius": 7,
+            "borderWidth": 1 if plot_type == "scatter" else 2,
+            "showLine": plot_type != "scatter",
+            "tension": 0.3 if plot_type == "line" else 0,
+        }
+        if stds is not None:
+            scatter_ds["errorBars"] = {
+                str(j): {
+                    "yMin": means[j] - stds[j],
+                    "yMax": means[j] + stds[j],
+                }
+                for j in range(len(vials))
+            }
+        datasets.append(scatter_ds)
+
+    # Reference ADC overlay dataset
+    if ref_data is not None:
+        ref_vials = ref_data["vials"]
+        ref_vals_display = {
+            v: ref_data["adc_mm2_per_s"][v] * 1e3 for v in ref_vials
+        }
+        # Case-insensitive lookup so CSV vial labels match the reference JSON
+        ref_vals_upper = {k.upper(): val for k, val in ref_vals_display.items()}
+        ref_pts = []
+        for j, v in enumerate(vials):
+            val = ref_vals_upper.get(v.upper())
+            if val is not None:
+                ref_pts.append({"x": j, "y": val})
+        if ref_pts:
+            datasets.append({
+                "label": "Reference ADC",
+                "data": ref_pts,
+                "borderColor": "transparent",
+                "backgroundColor": "transparent",
+                "pointBackgroundColor": "transparent",
+                "pointBorderColor": "#C62828",  # red open circles for reference
+                "pointBorderWidth": 2,
+                "pointRadius": 8,
+                "pointStyle": "circle",
+                "borderWidth": 0,
+                "showLine": False,
+            })
+
+    datasets_json = json.dumps(datasets)
+    vials_json = json.dumps(list(vials))
+    title_json = json.dumps(title)
+    y_label_json = json.dumps(y_label)
+
+    data_tag = phantomkit_data_tag(embedded_data)
+    opts_js = base_opts_js(x_label="Vial", y_label=y_label, enable_zoom=False)
+    head = html_head(title, include_niivue=_has_viewer)
+
+    # FA / generic: show a tick for every vial position
+    tick_step_js = ""
+    if contrast_mode in ("fa", "generic"):
+        tick_step_js = "opts.scales.x.ticks.stepSize = 1;"
+
+    # FA y-axis constraint JS
+    fa_ylim_js = ""
+    if contrast_mode == "fa":
+        fa_ylim_js = "opts.scales.y.min = 0; opts.scales.y.max = 1;"
+
+    # ADC mode: show legend to distinguish measured vs reference
+    adc_legend_js = ""
+    if contrast_mode == "adc":
+        adc_legend_js = (
+            "opts.plugins.legend.display = true;"
+            " opts.plugins.legend.labels = { color: '#888780', font: { size: 12 } };"
+        )
+
+    return f"""{head}
+<body>
+<h1>{title}</h1>
+<p class="subtitle">Interactive plot · scroll to zoom · drag to pan · double-click to reset view</p>
+
+{viewer_html}
+
+<div class="chart-card">
+  <div class="chart-title">{title}</div>
+  <div class="chart-wrap" style="height:340px"><canvas id="intensityChart"></canvas></div>
+</div>
+
+<div class="stats-section">
+  <div class="stats-title">Per-vial values</div>
+  <table class="stats-table">
+    <thead><tr><th>Vial</th><th>Mean</th><th>Std</th></tr></thead>
+    <tbody id="statsBody"></tbody>
+  </table>
+</div>
+
+{data_tag}
+
+<script>
+const VIALS = {vials_json};
+const DATASETS = {datasets_json};
+
+{ERROR_BAR_PLUGIN_JS}
+{opts_js}
+
+const opts = baseOpts("Vial", {y_label_json});
+opts.scales.x.type = "linear";
+opts.scales.x.ticks.callback = (v) => VIALS[v] ?? v;
+{tick_step_js}
+{fa_ylim_js}
+{adc_legend_js}
+
+const chart = new Chart(
+  document.getElementById("intensityChart").getContext("2d"),
+  {{ type: "line", data: {{ datasets: DATASETS }}, options: opts, plugins: [errorBarPlugin] }}
+);
+document.getElementById("intensityChart").addEventListener("dblclick", () => chart.resetZoom());
+
+{viewer_js}
+
+// Populate stats table
+const tbody = document.getElementById("statsBody");
+VIALS.forEach((v, j) => {{
+  const ds0 = DATASETS[0];
+  const mean = ds0.data[j]?.y ?? "";
+  const eb = ds0.errorBars?.[j];
+  const std = eb ? ((eb.yMax - eb.yMin) / 2).toFixed(4) : "";
+  tbody.innerHTML += `<tr><td>${{v}}</td><td>${{typeof mean === "number" ? mean.toFixed(4) : mean}}</td><td>${{std}}</td></tr>`;
+}});
+
+</script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -160,7 +370,7 @@ def main():
     )
     parser.add_argument(
         "--roi_image",
-        help="Optional PNG image (e.g. mrview screenshot with ROI overlay).",
+        help="Optional PNG image (e.g. mrview screenshot with ROI overlay). PNG mode only.",
     )
     parser.add_argument(
         "--annotate",
@@ -219,10 +429,34 @@ def plot_vial_intensity(
     output: str = "vial_subplot.png",
     phantom: str | None = None,
     template_dir: str | None = None,
+    output_format: str = "html",
+    nifti_image: str | None = None,
+    vial_niftis: dict | None = None,
 ):
     """Plot vial vs intensity. Mode (ADC/FA/generic) auto-detected from csv_file name.
 
     Can be called programmatically or via the CLI entry point (main()).
+
+    Parameters
+    ----------
+    csv_file : str
+        Path to mean values CSV.
+    plot_type : str
+        "scatter", "line", or "bar".
+    std_csv : str, optional
+        Path to standard deviations CSV (same shape as mean CSV).
+    roi_image : str, optional
+        Path to ROI overlay PNG. Used in PNG mode only.
+    annotate : bool
+        Annotate points (PNG mode only).
+    output : str
+        Output file path. Extension is replaced with .html when output_format="html".
+    phantom : str, optional
+        Phantom name for ADC reference lookup.
+    template_dir : str, optional
+        Directory containing per-phantom adc_reference.json files.
+    output_format : str
+        "html" (default) for interactive HTML, or "png" for static matplotlib figure.
     """
 
     # ---- Auto-detect contrast mode from csv_file filename ------------------
@@ -284,20 +518,71 @@ def plot_vial_intensity(
         if std_values is not None:
             std_values = std_values[mask.values]
 
-    # ---- Setup figure ------------------------------------------------------
-    ncols = 2 if roi_image else 1
-    fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 6), squeeze=False)
-    axes = axes[0]  # flatten row
-    ax = axes[0]
-
     # ---- In ADC mode, scale measured values to ×10⁻³ for display ----------
-    # The CSV is expected to contain raw ADC values in mm²/s; we convert here.
     display_values = mean_values * 1e3 if contrast_mode == "adc" else mean_values
     display_stds = (
         std_values * 1e3
         if (contrast_mode == "adc" and std_values is not None)
         else std_values
     )
+
+    # ---- Build axis labels and title ---------------------------------------
+    phantom_label = f"{phantom} Phantom – " if phantom else ""
+    if contrast_mode == "adc":
+        y_label = "ADC ×10⁻³ mm²/s"
+        title = f"{phantom_label}Measured vs Reference ADC"
+    elif contrast_mode == "fa":
+        y_label = "Fractional Anisotropy"
+        title = f"{phantom_label}Fractional Anisotropy (Mean ± Std)"
+    else:
+        y_label = "Intensity"
+        title = f"{phantom_label}Vial vs Intensity (Mean ± Std)"
+
+    # ========================================================================
+    # HTML output path
+    # ========================================================================
+    if output_format == "html":
+        output_file = os.path.abspath(
+            re.sub(r"\.(png|html)$", "", output, flags=re.IGNORECASE) + ".html"
+        )
+
+        embedded_data = {
+            "type": "vial_intensity",
+            "contrast_mode": contrast_mode,
+            "phantom": phantom,
+            "vials": list(vials),
+            "means": display_values.tolist(),
+            "stds": display_stds.tolist() if display_stds is not None else None,
+        }
+
+        html = _build_vial_intensity_html(
+            vials=list(vials),
+            display_values=display_values,
+            display_stds=display_stds,
+            n_vols=n_vols,
+            contrast_mode=contrast_mode,
+            ref_data=ref_data,
+            plot_type=plot_type,
+            phantom=phantom,
+            title=title,
+            y_label=y_label,
+            embedded_data=embedded_data,
+            nifti_image=nifti_image,
+            vial_niftis=vial_niftis,
+        )
+
+        Path(output_file).write_text(html, encoding="utf-8")
+        print(f"[INFO] Interactive HTML saved to: {output_file}")
+        return output_file
+
+    # ========================================================================
+    # PNG output path (original matplotlib behaviour)
+    # ========================================================================
+    # ---- Setup figure ------------------------------------------------------
+    ncols = 2 if roi_image else 1
+    fig, axes = plt.subplots(1, ncols, figsize=(8 * ncols, 6), squeeze=False)
+    axes = axes[0]  # flatten row
+    ax = axes[0]
 
     # ---- Plot each volume --------------------------------------------------
     cmap = plt.get_cmap("tab10")
@@ -372,8 +657,6 @@ def plot_vial_intensity(
     # ---- Axis labels -------------------------------------------------------
     ax.set_xlabel("Vial", fontsize=12)
 
-    phantom_label = f"{phantom} Phantom – " if phantom else ""
-
     if contrast_mode == "adc":
         ax.set_ylabel("ADC ×10⁻³ mm²/s", fontsize=12)
         ax.set_title(
@@ -438,14 +721,20 @@ def plot_vial_intensity(
 @click.argument("csv_file")
 @click.argument("plot_type", default="scatter")
 @click.option("--std-csv", default=None)
-@click.option("--roi-image", default=None)
+@click.option("--roi-image", default=None, help="ROI overlay PNG (PNG mode only).")
 @click.option("--annotate", is_flag=True, default=False)
 @click.option("--output", default="vial_subplot.png")
 @click.option("--phantom", default=None)
 @click.option("--template-dir", default=None)
-def main(
-    csv_file, plot_type, std_csv, roi_image, annotate, output, phantom, template_dir
-):
+@click.option(
+    "--format", "output_format",
+    default="html",
+    type=click.Choice(["html", "png"]),
+    show_default=True,
+    help="Output format: interactive HTML (default) or static PNG.",
+)
+def main(csv_file, plot_type, std_csv, roi_image, annotate, output,
+         phantom, template_dir, output_format):
     """Plot vial vs intensity (mean ± std) for 3D or 4D contrasts."""
     plot_vial_intensity(
         csv_file=csv_file,
@@ -456,6 +745,7 @@ def main(
         output=output,
         phantom=phantom,
         template_dir=template_dir,
+        output_format=output_format,
     )
 
 

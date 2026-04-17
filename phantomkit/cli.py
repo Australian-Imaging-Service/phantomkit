@@ -302,6 +302,49 @@ _register_plot_commands()
 
 
 # ---------------------------------------------------------------------------
+# View command — NiceGUI MRI viewer
+# ---------------------------------------------------------------------------
+
+
+@main.command("view")
+@click.argument("nifti_image", metavar="NIFTI")
+@click.option(
+    "--vials",
+    "vials_dir",
+    default=None,
+    metavar="DIR",
+    help="Directory containing vial ROI NIfTI masks (.nii.gz).",
+)
+@click.option("--title", default="MRI Viewer", show_default=True)
+@click.option(
+    "--port", default=8080, show_default=True, help="TCP port for the NiceGUI server."
+)
+def view_mri(nifti_image: str, vials_dir: str | None, title: str, port: int) -> None:
+    """Launch an interactive MRI viewer for a NIfTI image.
+
+    NIFTI is the path to the background .nii or .nii.gz file.
+
+    Use --vials to specify a directory of vial ROI masks that can be
+    toggled on/off as overlays.
+    """
+    from phantomkit.plotting.viewer import launch_viewer
+
+    vial_niftis: dict[str, str] = {}
+    if vials_dir:
+        vials_path = Path(vials_dir)
+        for p in sorted(vials_path.glob("*.nii.gz")):
+            name = p.name.replace(".nii.gz", "").replace(".nii", "")
+            vial_niftis[name] = str(p)
+
+    launch_viewer(
+        nifti_image=nifti_image,
+        vial_niftis=vial_niftis or None,
+        title=title,
+        port=port,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pipeline command — end-to-end phantom QC + DWI orchestrator
 # ---------------------------------------------------------------------------
 

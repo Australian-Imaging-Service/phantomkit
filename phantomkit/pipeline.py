@@ -322,7 +322,7 @@ def run_calibration_plot(
     for dwi_dir in dwi_output_dirs:
         session_name = dwi_dir.name
         metrics_dir = output_dir / session_name / "metrics"
-        adc_csv = metrics_dir / f"{session_name}_ADC_mean_matrix.csv"
+        adc_csv = metrics_dir / "csv" / "ADC_mean_matrix.csv"
         output_html = metrics_dir / f"{phantom}_vial_temperature_estimates.html"
 
         if not adc_csv.exists():

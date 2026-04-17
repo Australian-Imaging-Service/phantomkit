@@ -428,11 +428,10 @@ def _task_extract_metrics(
                 metrics_data["min"][vial_name].append(float(values[3]))
                 metrics_data["max"][vial_name].append(float(values[4]))
 
+        csv_dir = metrics_dir / "csv"
+        csv_dir.mkdir(parents=True, exist_ok=True)
         for metric_name, vial_data in metrics_data.items():
-            csv_file = (
-                metrics_dir
-                / f"{session_name}_{contrast_name}_{metric_name}_matrix.csv"
-            )
+            csv_file = csv_dir / f"{contrast_name}_{metric_name}_matrix.csv"
             rows = [
                 {
                     "vial": vn,
@@ -458,87 +457,146 @@ def _task_generate_plots(
     phantom_name: str,
     template_dir: str,
     metrics_sentinel: str,  # enforces Step 3 → Step 4 ordering; not used in body
+    output_format: str = "html",
 ) -> str:
-    """Generate per-contrast scatter plots and parametric map plots (IR / TE)."""
+    """Generate per-contrast scatter plots and parametric map plots (IR / TE).
+
+    Parameters
+    ----------
+    output_format : str
+        "html" (default) — interactive HTML; NIfTI paths passed directly.
+        "png"            — static matplotlib PNG; mrview used for ROI overlay.
+    """
     from phantomkit.plotting.vial_intensity import plot_vial_intensity
     from phantomkit.plotting.maps_ir import plot_vial_ir_means_std
     from phantomkit.plotting.maps_te import plot_vial_te_means_std
 
     metrics_path = Path(metrics_dir)
+    csv_dir = metrics_path / "csv"
+    plots_dir = metrics_path / "plots"
+    fits_dir = metrics_path / "fits"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    fits_dir.mkdir(parents=True, exist_ok=True)
     vial_dir_path = Path(vial_dir)
     tmp_vial_dir = vial_dir_path / "tmp"
     tmp_vial_dir.mkdir(exist_ok=True)
     vial_masks_list = list(vial_dir_path.glob("*.nii.gz"))
     contrast_file_paths = [Path(f) for f in contrast_files]
+    ext = ".html" if output_format == "html" else ".png"
+
+    def _matches(stem: str, token: str) -> bool:
+        return bool(re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
+
+    # Prefer a T1/MPRAGE image as the viewer background (same subject space as
+    # vials); fall back to the first matching contrast if none is found.
+    _t1_bg = next(
+        (str(f) for f in contrast_file_paths
+         if re.search(r"t1|mprage", f.stem, re.IGNORECASE)),
+        None,
+    )
+    _vial_niftis_map = {
+        v.name.replace(".nii.gz", "").replace(".nii", ""): str(v)
+        for v in vial_masks_list
+    }
+
+    # Load T1/T2 reference values if available
+    _relaxometry_ref = None
+    if template_dir and phantom_name:
+        _ref_path = Path(template_dir) / phantom_name / "t1t2_reference.json"
+        if _ref_path.exists():
+            with open(_ref_path) as _f:
+                _relaxometry_ref = json.load(_f)
 
     print("\nStep 4: Generating plots")
 
     # ── Per-contrast scatter plots ────────────────────────────────────────────
     for contrast_file in contrast_file_paths:
+        # Skip IR and TE contrasts — covered by T1_mapping and T2_mapping
+        if _matches(contrast_file.stem, "ir") or _matches(contrast_file.stem, "te"):
+            continue
         contrast_name = contrast_file.name
-        for ext in (".nii.gz", ".nii"):
-            if contrast_name.endswith(ext):
-                contrast_name = contrast_name[: -len(ext)]
+        for _ext in (".nii.gz", ".nii"):
+            if contrast_name.endswith(_ext):
+                contrast_name = contrast_name[: -len(_ext)]
                 break
 
-        mean_csv = metrics_path / f"{session_name}_{contrast_name}_mean_matrix.csv"
-        std_csv = metrics_path / f"{session_name}_{contrast_name}_std_matrix.csv"
+        mean_csv = csv_dir / f"{contrast_name}_mean_matrix.csv"
+        std_csv = csv_dir / f"{contrast_name}_std_matrix.csv"
 
         if not mean_csv.exists():
             print(f"  ⚠ Mean CSV not found, skipping plot for {contrast_name}")
             continue
 
-        output_plot = str(
-            metrics_path / f"{session_name}_{contrast_name}_PLOTmeanstd.png"
-        )
+        output_plot = str(plots_dir / f"{contrast_name}{ext}")
 
-        roi_image = None
-        if vial_masks_list:
-            roi_overlay = _build_roi_overlay(
-                contrast_file, vial_masks_list, contrast_name, tmp_vial_dir
-            )
-            if roi_overlay:
-                contrast_type = _classify_contrast(contrast_file)
-                intensity_range = (
-                    (0, 1)
-                    if contrast_type == "fa"
-                    else (0, 0.005)
-                    if contrast_type == "adc"
-                    else None
+        if output_format == "html":
+            try:
+                plot_vial_intensity(
+                    csv_file=str(mean_csv),
+                    plot_type="scatter",
+                    std_csv=str(std_csv) if std_csv.exists() else None,
+                    roi_image=None,
+                    output=output_plot,
+                    phantom=phantom_name,
+                    template_dir=template_dir,
+                    output_format="html",
+                    nifti_image=str(contrast_file),
+                    vial_niftis=_vial_niftis_map or None,
                 )
-                screenshot_base = str(
-                    tmp_vial_dir / f"{contrast_name}_roi_overlay.png"
+                print(f"    ✓ Generated HTML plot: {Path(output_plot).name}")
+            except Exception as e:
+                print(f"    ✗ HTML plot generation failed for {contrast_name}: {e}")
+        else:
+            roi_image = None
+            if vial_masks_list:
+                roi_overlay = _build_roi_overlay(
+                    contrast_file, vial_masks_list, contrast_name, tmp_vial_dir
                 )
-                actual_screenshot = _generate_mrview_screenshot(
-                    contrast_file,
-                    roi_overlay,
-                    screenshot_base,
-                    intensity_range=intensity_range,
-                )
-                if actual_screenshot and Path(actual_screenshot).exists():
-                    roi_image = actual_screenshot
+                if roi_overlay:
+                    contrast_type = _classify_contrast(contrast_file)
+                    intensity_range = (
+                        (0, 1)
+                        if contrast_type == "fa"
+                        else (0, 0.005)
+                        if contrast_type == "adc"
+                        else None
+                    )
+                    screenshot_base = str(
+                        tmp_vial_dir / f"{contrast_name}_roi_overlay.png"
+                    )
+                    actual_screenshot = _generate_mrview_screenshot(
+                        contrast_file,
+                        roi_overlay,
+                        screenshot_base,
+                        intensity_range=intensity_range,
+                    )
+                    if actual_screenshot and Path(actual_screenshot).exists():
+                        roi_image = actual_screenshot
 
-        try:
-            plot_vial_intensity(
-                csv_file=str(mean_csv),
-                plot_type="scatter",
-                std_csv=str(std_csv) if std_csv.exists() else None,
-                roi_image=roi_image,
-                output=output_plot,
-                phantom=phantom_name,
-                template_dir=template_dir,
-            )
-            print(f"    ✓ Generated plot: {Path(output_plot).name}")
-        except Exception as e:
-            print(f"    ✗ Plot generation failed for {contrast_name}: {e}")
+            try:
+                plot_vial_intensity(
+                    csv_file=str(mean_csv),
+                    plot_type="scatter",
+                    std_csv=str(std_csv) if std_csv.exists() else None,
+                    roi_image=roi_image,
+                    output=output_plot,
+                    phantom=phantom_name,
+                    template_dir=template_dir,
+                    output_format="png",
+                )
+                print(f"    ✓ Generated PNG plot: {Path(output_plot).name}")
+            except Exception as e:
+                print(f"    ✗ PNG plot generation failed for {contrast_name}: {e}")
 
     # ── Parametric map plots (IR and TE) ──────────────────────────────────────
-    def _matches(stem: str, token: str) -> bool:
-        return bool(re.search(rf"(?<![a-z0-9]){token}(?![a-z0-9])", stem.lower()))
+    _mapping_names = {
+        "ir": ("T1_mapping", "T1_fits"),
+        "te": ("T2_mapping", "T2_fits"),
+    }
 
-    for contrast_type_key, plot_fn, suffix in [
-        ("ir", plot_vial_ir_means_std, "ir_map_PLOTmeanstd_T1mapping.png"),
-        ("te", plot_vial_te_means_std, "TE_map_PLOTmeanstd_TEmapping.png"),
+    for contrast_type_key, plot_fn in [
+        ("ir", plot_vial_ir_means_std),
+        ("te", plot_vial_te_means_std),
     ]:
         matching = [
             f for f in contrast_file_paths if _matches(f.stem, contrast_type_key)
@@ -555,34 +613,55 @@ def _task_generate_plots(
             f"{[f.name for f in matching]}"
         )
 
-        output_plot = str(metrics_path / f"{session_name}_{suffix}")
+        _plot_name, _fits_name = _mapping_names[contrast_type_key]
+        output_plot = str(plots_dir / f"{_plot_name}{ext}")
+        _fits_output = str(fits_dir / f"{_fits_name}.csv")
         first_file = matching[0]
 
-        roi_image_arg = None
-        if vial_masks_list:
-            overlay_file = _build_roi_overlay(
-                first_file, vial_masks_list, contrast_type_key, tmp_vial_dir
-            )
-            if overlay_file:
-                screenshot_base = str(
-                    tmp_vial_dir / f"roi_overlay_{contrast_type_key}.png"
+        if output_format == "html":
+            try:
+                plot_fn(
+                    contrast_files=[str(f) for f in matching],
+                    metric_dir=str(csv_dir),
+                    output_file=output_plot,
+                    roi_image=None,
+                    output_format="html",
+                    fits_output=_fits_output,
+                    nifti_image=_t1_bg or str(first_file),
+                    vial_niftis=_vial_niftis_map or None,
+                    relaxometry_reference=_relaxometry_ref,
                 )
-                actual_screenshot = _generate_mrview_screenshot(
-                    first_file, overlay_file, screenshot_base
+                print(f"    ✓ Generated {contrast_type_key.upper()} HTML map plot")
+            except Exception as e:
+                print(f"    ✗ {contrast_type_key.upper()} HTML map plot failed: {e}")
+        else:
+            roi_image_arg = None
+            if vial_masks_list:
+                overlay_file = _build_roi_overlay(
+                    first_file, vial_masks_list, contrast_type_key, tmp_vial_dir
                 )
-                if actual_screenshot and Path(actual_screenshot).exists():
-                    roi_image_arg = actual_screenshot
+                if overlay_file:
+                    screenshot_base = str(
+                        tmp_vial_dir / f"roi_overlay_{contrast_type_key}.png"
+                    )
+                    actual_screenshot = _generate_mrview_screenshot(
+                        first_file, overlay_file, screenshot_base
+                    )
+                    if actual_screenshot and Path(actual_screenshot).exists():
+                        roi_image_arg = actual_screenshot
 
-        try:
-            plot_fn(
-                contrast_files=[str(f) for f in matching],
-                metric_dir=str(metrics_path),
-                output_file=output_plot,
-                roi_image=roi_image_arg,
-            )
-            print(f"    ✓ Generated {contrast_type_key.upper()} map plot")
-        except Exception as e:
-            print(f"    ✗ {contrast_type_key.upper()} map plot failed: {e}")
+            try:
+                plot_fn(
+                    contrast_files=[str(f) for f in matching],
+                    metric_dir=str(csv_dir),
+                    output_file=output_plot,
+                    roi_image=roi_image_arg,
+                    output_format="png",
+                    fits_output=_fits_output,
+                )
+                print(f"    ✓ Generated {contrast_type_key.upper()} PNG map plot")
+            except Exception as e:
+                print(f"    ✗ {contrast_type_key.upper()} PNG map plot failed: {e}")
 
     return metrics_dir  # sentinel for downstream ordering
 
@@ -715,6 +794,7 @@ def PhantomSessionWf(
     phantom_name: str,
     template_dir_parent: str,
     contrast_files: list,
+    output_format: str = "html",
 ) -> str:
     """
     End-to-end phantom QC workflow.
@@ -785,6 +865,7 @@ def PhantomSessionWf(
             phantom_name=phantom_name,
             template_dir=template_dir_parent,
             metrics_sentinel=metrics.sentinel,
+            output_format=output_format,
         ),
         name="generate_plots",
     )
@@ -844,9 +925,11 @@ class PhantomProcessor:
         self,
         template_dir: str,
         output_base_dir: str,
+        output_format: str = "html",
     ):
         self.template_dir = Path(template_dir)
         self.output_base_dir = Path(output_base_dir)
+        self.output_format = output_format
 
         # Phantom name is the last component of template_dir (e.g. "SPIRIT")
         self.phantom_name = self.template_dir.name
@@ -930,6 +1013,7 @@ class PhantomProcessor:
             phantom_name=self.phantom_name,
             template_dir_parent=str(self.template_dir.parent),
             contrast_files=contrast_files,
+            output_format=self.output_format,
         )
         cache_dir = str(output_dir / ".pydra_cache")
         with Submitter(worker="cf", cache_root=cache_dir) as sub:
