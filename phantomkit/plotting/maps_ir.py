@@ -125,6 +125,7 @@ def plot_vial_ir_means_std(
     vial_niftis: dict | None = None,
     fits_output: str | None = None,
     relaxometry_reference: dict | None = None,
+    phantom: str | None = None,
 ) -> str:
     """
     Create interactive HTML or publication-quality PNG plots of vial intensity
@@ -326,6 +327,7 @@ def plot_vial_ir_means_std(
 
         embedded_data = {
             "type": "maps_ir",
+            "phantom": phantom,
             "vial_groups": vial_groups,
             "contrast_numbers": contrast_numbers.tolist(),
             "mean_matrix": mean_matrix.tolist(),

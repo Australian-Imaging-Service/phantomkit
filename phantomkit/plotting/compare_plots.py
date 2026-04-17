@@ -585,7 +585,7 @@ def main(
         for i in range(len(html_files))
     ]
 
-    # ---- Auto-detect phantom from embedded data (vial_intensity stores it)
+    # ---- Auto-detect phantom from embedded data
     if phantom is None:
         for sr in sessions_raw:
             p = sr["data"].get("phantom")
@@ -597,9 +597,30 @@ def main(
     ref_vials: list[str] = []
     ref_vals: dict[str, float] = {}
     resolved_template_dir = template_dir or _auto_template_dir()
+
+    if resolved_template_dir and phantom is None:
+        # Auto-select phantom by finding the candidate whose reference vials best
+        # overlap with the measured vials across all input sessions.
+        measured_upper = set()
+        for sess in sessions:
+            measured_upper.update(sess["vals"].keys())
+        candidates = [
+            d.name for d in Path(resolved_template_dir).iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        ]
+        best_overlap, best_candidate = 0, None
+        for cand in candidates:
+            cand_vials, _ = _load_reference(metric, resolved_template_dir, cand)
+            overlap = len({v.upper() for v in cand_vials} & measured_upper)
+            if overlap > best_overlap:
+                best_overlap, best_candidate = overlap, cand
+        if best_candidate:
+            phantom = best_candidate
+
     if resolved_template_dir and phantom:
         ref_vials, ref_vals = _load_reference(metric, resolved_template_dir, phantom)
-    elif not ref_vals:
+
+    if not ref_vals:
         click.echo(
             "[WARN] Reference values not loaded — provide --template-dir and --phantom "
             "to overlay reference data.",

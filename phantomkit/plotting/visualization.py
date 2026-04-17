@@ -196,6 +196,7 @@ def GeneratePlots(
     vial_dir: Path,
     session_name: str,
     output_format: str = "html",
+    phantom_name: str | None = None,
 ) -> None:
     """
     Generate per-contrast vial intensity scatter plots and parametric map
@@ -389,6 +390,7 @@ def GeneratePlots(
                     fits_output=_fits_output,
                     nifti_image=_t1_bg or str(matching[0]),
                     vial_niftis=_vial_niftis,
+                    phantom=phantom_name,
                 ),
                 name=f"map_plot_{contrast_type}",
             )

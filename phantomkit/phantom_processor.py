@@ -630,6 +630,7 @@ def _task_generate_plots(
                     nifti_image=_t1_bg or str(first_file),
                     vial_niftis=_vial_niftis_map or None,
                     relaxometry_reference=_relaxometry_ref,
+                    phantom=phantom_name,
                 )
                 print(f"    ✓ Generated {contrast_type_key.upper()} HTML map plot")
             except Exception as e:
