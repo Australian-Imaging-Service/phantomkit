@@ -199,6 +199,46 @@ def _vial_axis(sessions: list[dict], ref_vials: list[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Session label derivation
+# ---------------------------------------------------------------------------
+
+
+def _derive_labels(paths: list[str]) -> list[str]:
+    """Derive a unique, human-readable label for each input path.
+
+    Finds the longest common path suffix shared by all files (walking inward
+    from the filename) and uses the first path component that *differs* between
+    files as the label.  This naturally surfaces the subject/session directory
+    regardless of how deeply the file is nested.
+
+    Example::
+
+        P000009_testing/native_contrasts_staging/metrics/plots/T1_mapping.html
+        P000008_html/native_contrasts_staging/metrics/plots/T1_mapping.html
+        → labels: ["P000009_testing", "P000008_html"]
+    """
+    if len(paths) == 1:
+        return [Path(paths[0]).stem]
+
+    parts_list = [Path(p).resolve().parts for p in paths]
+    min_len = min(len(p) for p in parts_list)
+
+    # Count how many components from the right are identical across all files.
+    common_suffix_len = 0
+    for i in range(1, min_len + 1):
+        if len({p[-i] for p in parts_list}) == 1:
+            common_suffix_len = i
+        else:
+            break
+
+    labels = []
+    for parts in parts_list:
+        idx = len(parts) - common_suffix_len - 1
+        labels.append(parts[idx] if idx >= 0 else parts[-1])
+    return labels
+
+
+# ---------------------------------------------------------------------------
 # Y-axis labels
 # ---------------------------------------------------------------------------
 
@@ -264,14 +304,14 @@ def _build_html(
         c = sess["color"]
         lbl = sess["label"]
         session_controls_html += (
-            f'\n    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
-            f'<span style="width:12px;height:12px;border-radius:50%;background:{c};'
+            f'\n    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">'
+            f'<span style="width:14px;height:14px;border-radius:50%;background:{c};'
             f'display:inline-block;flex-shrink:0;"></span>'
             f'<button id="pk-sess-btn-{i}" data-visible="1" onclick="pkToggleSession({i},this)"'
-            f' style="padding:4px 14px;border-radius:99px;border:1.5px solid var(--border);'
-            f'background:var(--bg3);color:var(--text);font-size:12px;font-weight:500;'
+            f' style="padding:5px 16px;border-radius:99px;border:1.5px solid var(--border);'
+            f'background:var(--bg3);color:var(--text);font-size:14px;font-weight:500;'
             f'cursor:pointer;user-select:none;transition:opacity .15s;">{lbl}</button>'
-            f'<label style="display:flex;align-items:center;gap:5px;font-size:12px;'
+            f'<label style="display:flex;align-items:center;gap:6px;font-size:14px;'
             f'color:var(--text2);cursor:pointer;">'
             f'<input type="checkbox" id="pk-incl-{i}" checked onchange="pkUpdateMean()">'
             f'include in mean</label>'
@@ -282,17 +322,17 @@ def _build_html(
     ref_legend_html = ""
     if has_ref:
         ref_legend_html = (
-            f'\n    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
-            f'<span style="width:12px;height:12px;border-radius:50%;background:transparent;'
+            f'\n    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">'
+            f'<span style="width:14px;height:14px;border-radius:50%;background:transparent;'
             f'border:2px solid {_REFERENCE_COLOR};display:inline-block;flex-shrink:0;"></span>'
-            f'<span style="font-size:12px;color:var(--text2);">Reference</span></div>'
+            f'<span style="font-size:14px;color:var(--text2);">Reference</span></div>'
         )
 
     mean_legend_html = (
-        '\n    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
-        '<span id="pk-mean-swatch" style="width:12px;height:12px;'
+        '\n    <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">'
+        '<span id="pk-mean-swatch" style="width:14px;height:14px;'
         'display:inline-block;flex-shrink:0;"></span>'
-        '<span style="font-size:12px;color:var(--text2);">Group mean (&#x25a0;)</span></div>'
+        '<span style="font-size:14px;color:var(--text2);">Group mean (&#x25a0;)</span></div>'
     )
 
     head = html_head(title)
@@ -304,7 +344,7 @@ def _build_html(
   <p class="subtitle">{y_label}</p>
 
   <div class="chart-card" style="margin-bottom:20px;">
-    <p class="chart-title">Sessions</p>
+    <p class="chart-title" style="font-size:15px;">Sessions</p>
     <div id="pk-session-controls">
 {session_controls_html}
 {ref_legend_html}
@@ -313,11 +353,11 @@ def _build_html(
   </div>
 
   <div class="chart-card">
-    <p class="chart-title">{metric} per vial</p>
-    <div class="chart-wrap" style="height:440px;">
+    <p class="chart-title" style="font-size:15px;">{metric} per vial</p>
+    <div class="chart-wrap" style="height:500px;">
       <canvas id="compChart"></canvas>
     </div>
-    <p style="font-size:11px;color:var(--text2);margin-top:8px;">
+    <p style="font-size:13px;color:var(--text2);margin-top:8px;">
       Click session buttons to toggle visibility &middot;
       check/uncheck &ldquo;include in mean&rdquo; to update the group mean (&squ;)
     </p>
@@ -351,8 +391,8 @@ SESSIONS.forEach(function(sess) {{
     borderColor: sess.color,
     pointBackgroundColor: sess.color,
     pointBorderColor: sess.color,
-    pointRadius: 6,
-    pointHoverRadius: 8,
+    pointRadius: 9,
+    pointHoverRadius: 11,
     pointStyle: "circle",
     showLine: false,
     borderWidth: 0,
@@ -367,9 +407,9 @@ datasets.push({{
   borderColor: "transparent",
   pointBackgroundColor: "transparent",
   pointBorderColor: REF_COLOR,
-  pointBorderWidth: 2,
-  pointRadius: 8,
-  pointHoverRadius: 10,
+  pointBorderWidth: 2.5,
+  pointRadius: 11,
+  pointHoverRadius: 13,
   pointStyle: "circle",
   showLine: false,
   borderWidth: 0,
@@ -384,8 +424,8 @@ datasets.push({{
   borderColor: MEAN_COLOR,
   pointBackgroundColor: MEAN_COLOR,
   pointBorderColor: MEAN_COLOR,
-  pointRadius: 8,
-  pointHoverRadius: 10,
+  pointRadius: 11,
+  pointHoverRadius: 13,
   pointStyle: "rect",
   showLine: false,
   borderWidth: 0,
@@ -418,10 +458,10 @@ const chart = new Chart(
       scales: {{
         x: {{
           type: "linear",
-          title: {{ display: true, text: "Vial", color: tickCol, font: {{ size: 13 }} }},
+          title: {{ display: true, text: "Vial", color: tickCol, font: {{ size: 15 }} }},
           ticks: {{
             color: tickCol,
-            font: {{ size: 12 }},
+            font: {{ size: 14 }},
             stepSize: 1,
             callback: function(v) {{
               return VIAL_LABELS[v] !== undefined ? VIAL_LABELS[v] : v;
@@ -430,8 +470,8 @@ const chart = new Chart(
           grid: {{ color: gridCol }},
         }},
         y: {{
-          title: {{ display: true, text: {y_label_json}, color: tickCol, font: {{ size: 13 }} }},
-          ticks: {{ color: tickCol, font: {{ size: 12 }} }},
+          title: {{ display: true, text: {y_label_json}, color: tickCol, font: {{ size: 15 }} }},
+          ticks: {{ color: tickCol, font: {{ size: 14 }} }},
           grid: {{ color: gridCol }},
         }}
       }}
@@ -555,22 +595,7 @@ def main(
     if labels:
         session_labels = list(labels)
     else:
-        stems = [Path(p).stem for p in html_files]
-        # If every stem is the same (e.g. all files named "ADC.html"),
-        # walk up the path skipping standard phantomkit directory names
-        # ('plots', 'metrics') to find the first meaningful ancestor.
-        if len(set(stems)) == 1 and len(stems) > 1:
-            _skip = {"plots", "metrics"}
-
-            def _meaningful_ancestor(path: str) -> str:
-                for part in reversed(Path(path).resolve().parts[:-1]):
-                    if part.lower() not in _skip:
-                        return part
-                return Path(path).stem
-
-            session_labels = [_meaningful_ancestor(p) for p in html_files]
-        else:
-            session_labels = stems
+        session_labels = _derive_labels(list(html_files))
 
     # ---- Assign colours
     colors = [_SESSION_PALETTE[i % len(_SESSION_PALETTE)] for i in range(len(html_files))]
