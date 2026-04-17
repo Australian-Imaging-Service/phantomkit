@@ -262,10 +262,8 @@ def _build_vial_intensity_html(
     opts_js = base_opts_js(x_label="Vial", y_label=y_label, enable_zoom=False)
     head = html_head(title, include_niivue=_has_viewer)
 
-    # FA / generic: show a tick for every vial position
-    tick_step_js = ""
-    if contrast_mode in ("fa", "generic"):
-        tick_step_js = "opts.scales.x.ticks.stepSize = 1;"
+    # Always show one tick per vial position
+    tick_step_js = "opts.scales.x.ticks.stepSize = 1;"
 
     # FA y-axis constraint JS
     fa_ylim_js = ""
