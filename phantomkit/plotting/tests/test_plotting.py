@@ -71,20 +71,20 @@ class TestPlotVialIntensity:
         _write_vial_intensity_csv(self.mean_csv, n_vols=1)
         _write_vial_intensity_csv(self.std_csv, n_vols=1)  # reuse as std
 
-    def test_scatter_returns_png_path(self) -> None:
+    def test_scatter_returns_html_path(self) -> None:
         out = self.fn(
             csv_file=str(self.mean_csv),
             plot_type="scatter",
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
-        assert out.endswith(".png")
+        assert out.endswith(".html")
         assert os.path.exists(out)
 
     def test_line_plot(self) -> None:
         out = self.fn(
             csv_file=str(self.mean_csv),
             plot_type="line",
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
         assert os.path.exists(out)
 
@@ -92,7 +92,7 @@ class TestPlotVialIntensity:
         out = self.fn(
             csv_file=str(self.mean_csv),
             plot_type="bar",
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
         assert os.path.exists(out)
 
@@ -101,7 +101,7 @@ class TestPlotVialIntensity:
             csv_file=str(self.mean_csv),
             plot_type="scatter",
             std_csv=str(self.std_csv),
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
         assert os.path.exists(out)
 
@@ -111,7 +111,7 @@ class TestPlotVialIntensity:
             plot_type="scatter",
             std_csv=str(self.std_csv),
             annotate=True,
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
         assert os.path.exists(out)
 
@@ -121,12 +121,11 @@ class TestPlotVialIntensity:
         out = self.fn(
             csv_file=str(mean_csv),
             plot_type="line",
-            output=str(self.tmp / "out.png"),
+            output=str(self.tmp / "out.html"),
         )
         assert os.path.exists(out)
 
     def test_with_roi_image(self, tmp_path) -> None:
-        # Create a tiny valid PNG using matplotlib itself
         import matplotlib.pyplot as plt
 
         roi_png = tmp_path / "roi.png"
@@ -139,7 +138,7 @@ class TestPlotVialIntensity:
             csv_file=str(self.mean_csv),
             plot_type="scatter",
             roi_image=str(roi_png),
-            output=str(tmp_path / "out.png"),
+            output=str(tmp_path / "out.html"),
         )
         assert os.path.exists(out)
 
@@ -236,7 +235,7 @@ class TestMapsIrPlot:
         out = plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
-            output_file=str(tmp_path / "ir_plot.png"),
+            output_file=str(tmp_path / "ir_plot.html"),
         )
         assert os.path.exists(out)
 
@@ -247,7 +246,7 @@ class TestMapsIrPlot:
         plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
-            output_file=str(tmp_path / "ir_plot.png"),
+            output_file=str(tmp_path / "ir_plot.html"),
         )
         # A CSV with fitted T1 values should be written alongside the plot
         # csv_files = (
@@ -279,7 +278,7 @@ class TestMapsIrPlot:
         out = plot_vial_ir_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
-            output_file=str(tmp_path / "ir_plot.png"),
+            output_file=str(tmp_path / "ir_plot.html"),
             roi_image=str(roi_png),
         )
         assert os.path.exists(out)
@@ -348,7 +347,7 @@ class TestMapsTePlot:
         out = plot_vial_te_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
-            output_file=str(tmp_path / "te_plot.png"),
+            output_file=str(tmp_path / "te_plot.html"),
         )
         assert os.path.exists(out)
 
@@ -365,7 +364,7 @@ class TestMapsTePlot:
         out = plot_vial_te_means_std(
             contrast_files=contrast_files,
             metric_dir=str(metrics),
-            output_file=str(tmp_path / "te_plot.png"),
+            output_file=str(tmp_path / "te_plot.html"),
             roi_image=str(roi_png),
         )
         assert os.path.exists(out)

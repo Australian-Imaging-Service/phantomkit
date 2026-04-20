@@ -1,0 +1,22 @@
+{
+  "SPIRIT": {
+    "5% Aqueous PVP NiCl2":  ["E"],
+    "10% Aqueous PVP NiCl2": ["F"],
+    "15% Aqueous PVP NiCl2": ["G"],
+    "20% Aqueous PVP NiCl2": ["H"],
+    "25% Aqueous PVP NiCl2": ["I"],
+    "30% Aqueous PVP NiCl2": ["J"],
+    "40% Aqueous PVP NiCl2": ["K"],
+    "50% Aqueous PVP NiCl2": ["L"]
+  },
+  "120E": {
+    "5% Aqueous PVP NiCl2":  ["G", "M"],
+    "10% Aqueous PVP NiCl2": ["H", "N"],
+    "15% Aqueous PVP NiCl2": ["I", "O"],
+    "20% Aqueous PVP NiCl2": ["J", "P", "W"],
+    "25% Aqueous PVP NiCl2": ["A", "Q", "X"],
+    "30% Aqueous PVP NiCl2": ["B", "E", "R"],
+    "40% Aqueous PVP NiCl2": ["C", "F", "S"],
+    "50% Aqueous PVP NiCl2": ["D", "T"]
+  }
+}
