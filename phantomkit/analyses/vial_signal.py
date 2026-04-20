@@ -139,7 +139,7 @@ def GetVialMasks(template_dir: Directory) -> list[NiftiGz]:
     """
     from pathlib import Path as _Path
 
-    return sorted((_Path(template_dir) / "vials_labelled").glob("*.nii.gz"))
+    return sorted((_Path(template_dir) / "VialsLabelled").glob("*.nii.gz"))
 
 
 @python.define
@@ -201,7 +201,7 @@ def VialSignalAnalysis(
         All NIfTI files in the same directory are treated as contrast images.
     template_dir : Directory
         Path to the phantom template directory.  Must contain
-        ``ImageTemplate.nii.gz`` and a ``vials_labelled/`` sub-directory of
+        ``ImageTemplate.nii.gz`` and a ``VialsLabelled/`` sub-directory of
         per-vial mask files.
     output_base_dir : Path, optional
         Root output directory.  A sub-directory named after the session

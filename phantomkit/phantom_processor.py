@@ -14,7 +14,7 @@ Contains ``PhantomProcessor``, a class that orchestrates a Pydra workflow:
 
 Path conventions (shared repo):
     template_data/<phantom>/ImageTemplate.nii.gz
-    template_data/<phantom>/vials_labelled/*.nii.gz
+    template_data/<phantom>/VialsLabelled/*.nii.gz
     template_data/<phantom>/adc_reference.json
 """
 
@@ -916,7 +916,7 @@ class PhantomProcessor:
     template_dir:
         Directory for this phantom type, e.g.
         ``<repo>/template_data/SPIRIT``.
-        Must contain ``ImageTemplate.nii.gz`` and ``vials_labelled/``.
+        Must contain ``ImageTemplate.nii.gz`` and ``VialsLabelled/``.
     output_base_dir:
         Top-level output directory.  Results are written to a
         ``<session_name>/`` subdirectory within this path.
@@ -936,7 +936,7 @@ class PhantomProcessor:
         self.phantom_name = self.template_dir.name
 
         self.template_phantom = self.template_dir / "ImageTemplate.nii.gz"
-        self.vial_dir = self.template_dir / "vials_labelled"
+        self.vial_dir = self.template_dir / "VialsLabelled"
         self.vial_masks = sorted(self.vial_dir.glob("*.nii.gz"))
 
         # Load ADC vials from adc_reference.json

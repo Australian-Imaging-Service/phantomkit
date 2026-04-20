@@ -45,7 +45,7 @@ Usage
 Path conventions (shared repo)
 -------------------------------
   template_data/<phantom>/ImageTemplate.nii.gz
-  template_data/<phantom>/vials_labelled/*.nii.gz
+  template_data/<phantom>/VialsLabelled/*.nii.gz
   template_data/<phantom>/adc_reference.json
   template_data/rotations.txt
 
@@ -538,12 +538,12 @@ def validate_inputs(args):
         )
     else:
         template_img = phantom_dir / "ImageTemplate.nii.gz"
-        vials_dir = phantom_dir / "vials_labelled"
+        vials_dir = phantom_dir / "VialsLabelled"
         if not template_img.exists():
             errors.append(f"ImageTemplate.nii.gz not found in: {phantom_dir}")
         if not vials_dir.is_dir() or not list(vials_dir.glob("*.nii.gz")):
             errors.append(
-                f"vials_labelled/ with .nii.gz masks not found in: {phantom_dir}"
+                f"VialsLabelled/ with .nii.gz masks not found in: {phantom_dir}"
             )
 
     if not DWI_SCRIPT.exists():

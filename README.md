@@ -11,8 +11,9 @@
 
 ## Features
 
-- **End-to-end pipeline** — single command processes a raw DICOM session directory through DWI preprocessing, phantom QC in DWI space, and native contrast QC
-- **Automatic series classification** — DWI, reverse phase-encode, T1, IR, and TE series are detected and paired automatically from folder names and DICOM sidecar metadata; no manual configuration required
+- **End-to-end pipeline** — single command processes a session directory through DWI preprocessing, phantom QC in DWI space, and native contrast QC
+- **Format-agnostic input** — each series sub-directory may contain DICOM, NIfTI (`.nii`/`.nii.gz`), or MRtrix MIF (`.mif`/`.mif.gz`) files; format is detected automatically per sub-directory
+- **Automatic series classification** — DWI, reverse phase-encode, T1, IR, and TE series are detected and paired automatically from folder names and sidecar metadata; no manual configuration required
 - **DWI preprocessing** — FSL `dwifslpreproc` with automatic phase-encoding correction mode selection (`rpe_none`, `rpe_pair`, `rpe_all`), optional denoising/Gibbs correction, tensor fitting, and T1-to-DWI co-registration via FLIRT
 - **Template-based registration** — iterative ANTs rigid registration with automatic orientation search across a rotation library; vial masks propagated to subject space via inverse transform
 - **Vial metric extraction** — per-vial mean, median, std, min and max across all contrast images (T1, IR, TE, ADC, FA), written to CSV
@@ -33,20 +34,34 @@ The pipeline requires FSL, MRtrix3, ANTs, and dcm2niix to be available on `PATH`
 - [FSL](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/) — `dwifslpreproc`, `flirt`, `convert_xfm`
 - [MRtrix3](https://www.mrtrix.org/) — `mrconvert`, `dwi2tensor`, `tensor2metric`, `dwidenoise`, `mrdegibbs`, `mrstats`, `mrview`
 - [ANTs](http://stnava.github.io/ANTs/) — `antsRegistrationSyN.sh`, `antsApplyTransforms`
-- [dcm2niix](https://github.com/rordenlab/dcm2niix) — DICOM to NIfTI conversion
+- [dcm2niix](https://github.com/rordenlab/dcm2niix) — DICOM to NIfTI conversion (required only when input is DICOM)
 
 ## Basic usage
 
 ### End-to-end pipeline
 
-Point the pipeline at a session directory containing DICOM subdirectories:
+Point the pipeline at a session directory whose sub-directories contain DICOM, NIfTI, or MIF series. The format is detected automatically per sub-directory — no conversion needed beforehand.
 
 ```bash
+# SPIRIT phantom (accepts DICOM, NIfTI, or MIF sub-directories)
 phantomkit pipeline \
     --input-dir  /data/session01 \
     --output-dir /results/session01 \
     --phantom    SPIRIT
+
+# 120E phantom (T1 and T2 mapping supported)
+phantomkit pipeline \
+    --input-dir  /data/session01 \
+    --output-dir /results/session01 \
+    --phantom    120E
 ```
+
+Supported phantoms and their reference data:
+
+| Phantom | ADC | T1 mapping | T2 mapping |
+|---------|-----|------------|------------|
+| SPIRIT  | ✓ (vials E–L) | ✓ (12 vials) | ✓ (12 vials) |
+| 120E    | ✓ (all 24 vials) | ✓ (24 vials) | ✓ (24 vials) |
 
 Optional flags:
 
