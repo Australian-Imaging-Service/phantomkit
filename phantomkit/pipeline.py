@@ -30,6 +30,10 @@ Usage
     --output-dir /path/to/outputs \\
     --phantom    SPIRIT
 
+  The input directory may contain series sub-directories holding DICOM files,
+  NIfTI files (.nii / .nii.gz), or MRtrix MIF files (.mif / .mif.gz).
+  Format detection is automatic per sub-directory.
+
   Optional flags:
     --denoise-degibbs   pass to DWI pipeline
     --gradcheck         pass to DWI pipeline
@@ -116,20 +120,67 @@ def run_cmd(cmd: list, label: str):
         raise RuntimeError(f"{label} failed (exit {result.returncode}).")
 
 
-def convert_dicom_dir(dicom_dir: Path, out_dir: Path) -> list:
+def _detect_series_format(series_dir: Path) -> str:
+    """Return 'nifti', 'mif', or 'dicom' based on file contents of series_dir."""
+    if any(series_dir.glob("*.nii.gz")) or any(series_dir.glob("*.nii")):
+        return "nifti"
+    if any(series_dir.glob("*.mif.gz")) or any(series_dir.glob("*.mif")):
+        return "mif"
+    return "dicom"
+
+
+def stage_series_dir(series_dir: Path, out_dir: Path) -> list:
     """
-    Run dcm2niix on dicom_dir, placing NIfTIs in out_dir.
+    Stage a series directory into out_dir as .nii.gz files.
+    Handles DICOM (dcm2niix), NIfTI (copy), and MIF (mrconvert).
     Returns list of produced .nii.gz paths.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    fmt = _detect_series_format(series_dir)
+
+    if fmt == "nifti":
+        produced = []
+        for nii in sorted(series_dir.glob("*.nii.gz")):
+            dst = out_dir / nii.name
+            shutil.copy2(nii, dst)
+            produced.append(str(dst))
+        for nii in sorted(series_dir.glob("*.nii")):
+            dst = out_dir / (nii.stem + ".nii.gz")
+            subprocess.run(
+                ["mrconvert", str(nii), str(dst)], check=True, capture_output=True
+            )
+            produced.append(str(dst))
+        if not produced:
+            raise FileNotFoundError(f"No NIfTI files found in {series_dir}")
+        return produced
+
+    if fmt == "mif":
+        produced = []
+        mifs = sorted(series_dir.glob("*.mif.gz")) + sorted(series_dir.glob("*.mif"))
+        for mif in mifs:
+            stem = mif.name
+            for ext in (".mif.gz", ".mif"):
+                if stem.endswith(ext):
+                    stem = stem[: -len(ext)]
+                    break
+            dst = out_dir / f"{stem}.nii.gz"
+            subprocess.run(
+                ["mrconvert", str(mif), str(dst)], check=True, capture_output=True
+            )
+            produced.append(str(dst))
+        if not produced:
+            raise FileNotFoundError(f"No MIF files found in {series_dir}")
+        return produced
+
+    # DICOM fallback
     subprocess.run(
-        ["dcm2niix", "-o", str(out_dir), "-f", "%p", "-z", "y", str(dicom_dir)],
+        ["dcm2niix", "-o", str(out_dir), "-f", "%p", "-z", "y", str(series_dir)],
         check=True,
         capture_output=True,
     )
     niis = sorted(out_dir.glob("*.nii.gz"))
     if not niis:
-        raise FileNotFoundError(f"dcm2niix produced no NIfTI from {dicom_dir}")
+        raise FileNotFoundError(f"dcm2niix produced no NIfTI from {series_dir}")
     return [str(p) for p in niis]
 
 
@@ -400,26 +451,28 @@ def run_stage3(
     contrast_dirs_to_convert = [primary_t1_dir] + ir_dirs + te_dirs
 
     if dry_run:
-        print("  [DRY RUN] Would convert DICOMs to NIfTI and place in staging folder:")
+        print("  [DRY RUN] Would stage series to NIfTI and place in staging folder:")
         for d in contrast_dirs_to_convert:
-            print(f"    {d.name}  →  {staging_dir}/")
-        print("\n  [DRY RUN] Would run PhantomProcessor on converted T1 NIfTI.\n")
+            fmt = _detect_series_format(d)
+            print(f"    {d.name} ({fmt})  →  {staging_dir}/")
+        print("\n  [DRY RUN] Would run PhantomProcessor on staged T1 NIfTI.\n")
         return
 
-    # Convert DICOMs to NIfTI
+    # Stage series to NIfTI (handles DICOM, NIfTI, and MIF inputs)
     staging_dir.mkdir(parents=True, exist_ok=True)
     t1_nii_path = None
 
-    for dicom_dir in contrast_dirs_to_convert:
-        print(f"  Converting DICOM: {dicom_dir.name}")
+    for series_dir in contrast_dirs_to_convert:
+        fmt = _detect_series_format(series_dir)
+        print(f"  Staging series ({fmt}): {series_dir.name}")
         try:
-            produced = convert_dicom_dir(dicom_dir, staging_dir)
+            produced = stage_series_dir(series_dir, staging_dir)
             print(f"    Produced: {[Path(p).name for p in produced]}")
-            if dicom_dir == primary_t1_dir:
+            if series_dir == primary_t1_dir:
                 t1_nii_path = Path(produced[0])
         except Exception as e:
-            print(f"  WARNING: DICOM conversion failed for {dicom_dir.name}: {e}")
-            if dicom_dir == primary_t1_dir:
+            print(f"  WARNING: Staging failed for {series_dir.name}: {e}")
+            if series_dir == primary_t1_dir:
                 print("  Cannot proceed with Stage 3 without a T1 image.")
                 shutil.rmtree(staging_dir, ignore_errors=True)
                 return
@@ -518,7 +571,11 @@ def main():
     parser.add_argument(
         "--input-dir",
         required=True,
-        help="Root directory containing acquisition subdirectories (DICOM folders).",
+        help=(
+            "Root directory containing acquisition subdirectories. "
+            "Each sub-directory may hold DICOM, NIfTI (.nii/.nii.gz), "
+            "or MIF (.mif/.mif.gz) files — format is detected automatically."
+        ),
     )
     parser.add_argument(
         "--output-dir",

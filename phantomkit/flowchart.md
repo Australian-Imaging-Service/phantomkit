@@ -1,25 +1,26 @@
 ```mermaid
 flowchart TD
-    INPUT[/"--input-dir  --phantom  --output-dir"/]
+    INPUT[/"--input-dir  --phantom  --output-dir<br/>Sub-directories may contain DICOM · NIfTI (.nii/.nii.gz) · MIF (.mif/.mif.gz)"/]
 
-    INPUT --> SCAN[Scan input directory]
+    INPUT --> SCAN["Scan input directory<br/>format auto-detected per sub-directory"]
     SCAN --> S1
     SCAN --> S3
 
     subgraph S1["Stage 1 — DWI Processing (dwi_processing.py)"]
         direction TB
-        DWI_IN[DWI DICOM series] --> PREPROC[dwifslpreproc / eddy]
-        T1_IN[T1 DICOM] --> DCM2NIIX1[dcm2niix]
+        DWI_IN["DWI series<br/>(DICOM · NIfTI · MIF)"] --> STAGE1["stage_series<br/>→ NIfTI + bvec/bval"]
+        T1_IN["T1 series<br/>(DICOM · NIfTI · MIF)"] --> STAGE1T1["stage_series → T1.nii.gz"]
+        STAGE1 --> PREPROC[dwifslpreproc / eddy]
         PREPROC --> TENSOR["dwi2tensor → tensor2metric<br/>ADC.nii.gz  FA.nii.gz"]
         TENSOR --> FLIRT["flirt<br/>b0 → T1 co-registration"]
-        DCM2NIIX1 --> FLIRT
+        STAGE1T1 --> FLIRT
         FLIRT --> T1DWI[T1_in_DWI_space.nii.gz]
     end
 
     subgraph S3["Stage 3 — Native Contrast QC (phantom_processor.py)"]
         direction TB
-        DCM2NIIX3["dcm2niix<br/>T1 + IR + TE DICOMs → NIfTI"]
-        DCM2NIIX3 --> WF3["PhantomSessionWf<br/>— see workflow detail —"]
+        STAGE3["stage_series_dir<br/>T1 + IR + TE → NIfTI staging folder<br/>(DICOM · NIfTI · MIF)"]
+        STAGE3 --> WF3["PhantomSessionWf<br/>— see workflow detail —"]
     end
 
     T1DWI --> S2
@@ -38,9 +39,9 @@ flowchart TD
         REG -->|transform_matrix| FWDXFM["⑤  antsApplyTransforms<br/>all contrasts → template space"]
 
         VIALS -->|vial_paths| METRICS["③  mrgrid + mrstats<br/>per-vial mean / median / std / min / max<br/>→ CSV files"]
-        REFDATA[/"template_data/{phantom}/<br/>adc_reference.json<br/>t1t2_reference.json"/]
+        REFDATA[/"template_data/{phantom}/<br/>adc_reference.json<br/>t1t2_reference.json<br/>(SPIRIT: 12 vials · 120E: 24 vials)"/]
         REFDATA --> PLOTS
-        METRICS -->|sentinel| PLOTS["④  plot_vial_intensity<br/>plot_vial_ir_means_std<br/>plot_vial_te_means_std<br/>→ Interactive HTML<br/>   (NiiVue viewer + Chart.js)<br/>   PNG fallback available"]
+        METRICS -->|sentinel| PLOTS["④  plot_vial_intensity<br/>plot_vial_ir_means_std  ← if IR series present<br/>plot_vial_te_means_std  ← if TE series present<br/>→ Interactive HTML<br/>   (NiiVue viewer + Chart.js)<br/>   PNG fallback available"]
 
         PLOTS -->|sentinel| CLEANUP["⑥  shutil.rmtree<br/>tmp  tmp_vials  tmp_vols  vial_dir/tmp"]
         FWDXFM -->|sentinel| CLEANUP

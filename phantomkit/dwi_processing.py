@@ -245,21 +245,103 @@ def get_acq_stem_and_suffix(folder_name: str) -> tuple:
 # =============================================================================
 
 
-def convert_dicom_to_nii(dicom_dir: str, out_dir: str) -> dict:
+def _detect_series_format(series_dir: str) -> str:
+    """Return 'nifti', 'mif', or 'dicom' based on file contents of series_dir."""
+    p = Path(series_dir)
+    if any(p.glob("*.nii.gz")) or any(p.glob("*.nii")):
+        return "nifti"
+    if any(p.glob("*.mif.gz")) or any(p.glob("*.mif")):
+        return "mif"
+    return "dicom"
+
+
+def convert_series_to_nii(series_dir: str, out_dir: str) -> dict:
     """
-    Run dcm2niix on a DICOM directory, returning a dict with paths to:
-      nii, json, bvec, bval
-    Returns empty strings for missing files.
+    Stage a series directory to NIfTI, handling DICOM, NIfTI, and MIF inputs.
+    Returns dict with paths to: nii, json, bvec, bval (empty string if absent).
     """
+    fmt = _detect_series_format(series_dir)
     os.makedirs(out_dir, exist_ok=True)
+
+    if fmt == "nifti":
+        niis = sorted(Path(series_dir).glob("*.nii.gz"))
+        if not niis:
+            niis = [p for p in sorted(Path(series_dir).glob("*.nii"))
+                    if not p.name.endswith(".nii.gz")]
+        if not niis:
+            raise FileNotFoundError(f"No NIfTI files in {series_dir}")
+        nii_src = niis[0]
+        base_src = str(nii_src)
+        for _ext in (".nii.gz", ".nii"):
+            if base_src.endswith(_ext):
+                base_src = base_src[: -len(_ext)]
+                break
+        if str(nii_src).endswith(".nii.gz"):
+            dst_nii = str(Path(out_dir) / nii_src.name)
+            shutil.copy2(nii_src, dst_nii)
+        else:
+            dst_nii = str(Path(out_dir) / (nii_src.stem + ".nii.gz"))
+            subprocess.run(
+                ["mrconvert", str(nii_src), dst_nii], check=True, capture_output=True
+            )
+        base_dst = dst_nii.replace(".nii.gz", "")
+
+        def _copy_sidecar(ext: str) -> str:
+            src = base_src + ext
+            if Path(src).exists():
+                dst = base_dst + ext
+                shutil.copy2(src, dst)
+                return dst
+            return ""
+
+        return {
+            "nii": dst_nii,
+            "json": _copy_sidecar(".json"),
+            "bvec": _copy_sidecar(".bvec"),
+            "bval": _copy_sidecar(".bval"),
+        }
+
+    if fmt == "mif":
+        mifs = sorted(Path(series_dir).glob("*.mif.gz")) + sorted(
+            Path(series_dir).glob("*.mif")
+        )
+        if not mifs:
+            raise FileNotFoundError(f"No MIF files in {series_dir}")
+        mif_src = mifs[0]
+        stem = mif_src.name
+        for _ext in (".mif.gz", ".mif"):
+            if stem.endswith(_ext):
+                stem = stem[: -len(_ext)]
+                break
+        nii = str(Path(out_dir) / f"{stem}.nii.gz")
+        bvec = str(Path(out_dir) / f"{stem}.bvec")
+        bval = str(Path(out_dir) / f"{stem}.bval")
+        json_out = str(Path(out_dir) / f"{stem}.json")
+        subprocess.run(
+            [
+                "mrconvert", str(mif_src), nii,
+                "-export_grad_fsl", bvec, bval,
+                "-json_export", json_out,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return {
+            "nii": nii,
+            "json": json_out if Path(json_out).exists() else "",
+            "bvec": bvec if Path(bvec).exists() else "",
+            "bval": bval if Path(bval).exists() else "",
+        }
+
+    # DICOM fallback
     subprocess.run(
-        ["dcm2niix", "-o", out_dir, "-f", "%p", "-z", "y", dicom_dir],
+        ["dcm2niix", "-o", out_dir, "-f", "%p", "-z", "y", series_dir],
         check=True,
         capture_output=True,
     )
     niis = sorted(Path(out_dir).glob("*.nii.gz"))
     if not niis:
-        raise FileNotFoundError(f"No NIfTI produced from DICOM: {dicom_dir}")
+        raise FileNotFoundError(f"No NIfTI produced from DICOM: {series_dir}")
     nii = str(niis[0])
     base = nii.replace(".nii.gz", "")
     return {
@@ -279,7 +361,7 @@ def scan_directory(scans_dir: str) -> dict:
     """
     First pass: classify subdirectories into t1_dirs, candidate_dwi (all series
     containing _diff_ or _DWI_), and ignored. PE classification is PROVISIONAL
-    at this stage — final assignment happens after DICOM conversion in
+    at this stage — final assignment happens after series staging in
     classify_candidates().
     """
     scans_path = Path(scans_dir)
@@ -323,20 +405,22 @@ def scan_directory(scans_dir: str) -> dict:
 
 def convert_all_candidates(candidate_dwi: list, output_dir: str) -> dict:
     """
-    (#18 ordering step 2) Convert all candidate DWI DICOMs upfront.
-    Returns a dict: {dicom_dir: {nii, json, bvec, bval}}
+    (#18 ordering step 2) Stage all candidate DWI series upfront.
+    Handles DICOM, NIfTI, and MIF inputs.
+    Returns a dict: {series_dir: {nii, json, bvec, bval}}
     """
     conversions = {}
-    for dicom_dir in candidate_dwi:
-        name = Path(dicom_dir).name
+    for series_dir in candidate_dwi:
+        name = Path(series_dir).name
         conv_dir = str(Path(output_dir) / name / "tmp" / "dwi_nii")
-        print(f"  Converting: {name}")
+        fmt = _detect_series_format(series_dir)
+        print(f"  Staging ({fmt}): {name}")
         try:
-            result = convert_dicom_to_nii(dicom_dir, conv_dir)
-            conversions[dicom_dir] = result
+            result = convert_series_to_nii(series_dir, conv_dir)
+            conversions[series_dir] = result
         except Exception as e:
-            print(f"  WARNING: DICOM conversion failed for {name}: {e}")
-            conversions[dicom_dir] = None
+            print(f"  WARNING: Series staging failed for {name}: {e}")
+            conversions[series_dir] = None
     return conversions
 
 
@@ -865,7 +949,7 @@ def plan_workflow(
             rpe_conv = conversions.get(rpe_dir_path)
             if rpe_conv is None:
                 rpe_conv_dir = str(Path(tmp_dir) / "rpe_nii")
-                rpe_conv = convert_dicom_to_nii(rpe_dir_path, rpe_conv_dir)
+                rpe_conv = convert_series_to_nii(rpe_dir_path, rpe_conv_dir)
                 conversions[rpe_dir_path] = rpe_conv
             rpe_nii = rpe_conv["nii"]
             rpe_nvols = get_nvols(rpe_nii)
@@ -875,7 +959,7 @@ def plan_workflow(
             fwd_conv = conversions.get(fwd_pe_dir_used)
             if fwd_conv is None:
                 fwd_conv_dir = str(Path(tmp_dir) / "fwd_pe_nii")
-                fwd_conv = convert_dicom_to_nii(fwd_pe_dir_used, fwd_conv_dir)
+                fwd_conv = convert_series_to_nii(fwd_pe_dir_used, fwd_conv_dir)
                 conversions[fwd_pe_dir_used] = fwd_conv
             fwd_pe_nii = fwd_conv["nii"]
 
@@ -1130,21 +1214,15 @@ def print_plan(plans: list, skipped: list):
 
 
 @python.define(outputs=["nii", "json_file", "bvec", "bval", "sentinel"])
-def convert_dicoms(dicom_dir: str, out_dir: str) -> tuple[str, str, str, str, str]:
-    """Convert a DICOM directory to NIfTI. Returns NIfTI + sidecar paths."""
-    os.makedirs(out_dir, exist_ok=True)
-    run_cmd(["dcm2niix", "-o", out_dir, "-f", "%p", "-z", "y", dicom_dir])
-    niis = sorted(Path(out_dir).glob("*.nii.gz"))
-    if not niis:
-        raise FileNotFoundError(f"No NIfTI files produced in {out_dir}")
-    nii = str(niis[0])
-    base = nii.replace(".nii.gz", "")
+def stage_series(series_dir: str, out_dir: str) -> tuple[str, str, str, str, str]:
+    """Stage a series (DICOM/NIfTI/MIF) to NIfTI. Returns NIfTI + sidecar paths."""
+    result = convert_series_to_nii(series_dir, out_dir)
     return (
-        nii,
-        base + ".json" if Path(base + ".json").exists() else "",
-        base + ".bvec" if Path(base + ".bvec").exists() else "",
-        base + ".bval" if Path(base + ".bval").exists() else "",
-        nii,  # sentinel: forces true lazy dependency in downstream tasks
+        result["nii"],
+        result.get("json", ""),
+        result.get("bvec", ""),
+        result.get("bval", ""),
+        result["nii"],  # sentinel: forces true lazy dependency in downstream tasks
     )
 
 
@@ -1492,7 +1570,7 @@ def build_dwi_workflow(plan: dict):
       resolved at workflow-class-definition time using concrete plan values
       captured in the closure. Each unique combination gets a distinctly-named
       class so pydra's cache correctly distinguishes them.
-    - convert_dicoms returns a sentinel output (=nii) so downstream tasks that
+    - stage_series returns a sentinel output (=nii) so downstream tasks that
       need T1-before-DWI ordering have a true lazy dependency edge, not a
       resolved string literal that pydra treats as a known constant.
     - CP1 (all final outputs exist) is checked before building the workflow —
@@ -1569,9 +1647,9 @@ def build_dwi_workflow(plan: dict):
         @workflow.define(outputs=["result"])
         def DwiWf(x: int) -> str:
 
-            # T1 DICOM conversion (always needed for registration)
+            # T1 series staging (always needed for registration)
             conv_t1 = workflow.add(
-                convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir),
+                stage_series(series_dir=t1_dir, out_dir=t1_conv_dir),
                 name="convert_t1",
             )
 
@@ -1632,10 +1710,10 @@ def build_dwi_workflow(plan: dict):
         @workflow.define(outputs=["result"])
         def DwiWf(x: int) -> str:
 
-            # ── T1 DICOM conversion ───────────────────────────────────────────
+            # ── T1 series staging ─────────────────────────────────────────────
             # Always run — needed for registration regardless of skip_preproc.
             conv_t1 = workflow.add(
-                convert_dicoms(dicom_dir=t1_dir, out_dir=t1_conv_dir),
+                stage_series(series_dir=t1_dir, out_dir=t1_conv_dir),
                 name="convert_t1",
             )
             # conv_t1.sentinel is a true lazy output — used to gate DWI chain
