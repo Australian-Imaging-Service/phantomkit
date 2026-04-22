@@ -142,6 +142,8 @@ def _build_roi_overlay(
             str(vial_mask),
             "regrid",
             regridded,
+            "-interp", "nearest",
+            "-datatype", "bit",
             "-force",
         ]
         subprocess.run(cmd, check=True, capture_output=True)
@@ -372,6 +374,8 @@ def _task_extract_metrics(
                 vial_mask,
                 "regrid",
                 regridded_mask,
+                "-interp", "nearest",
+                "-datatype", "bit",
                 "-force",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
