@@ -11,10 +11,31 @@ PhantomKit QA generates a set of **self-contained interactive HTML files** for e
 | File | Contents |
 |---|---|
 | `{contrast_name}.html` | Per-contrast vial scatter plot (one per DWI/T1/FA/ADC contrast) |
-| `T1_mapping.html` | Inversion-recovery T1 curve fits for all vials |
-| `T2_mapping.html` | Multi-echo T2 decay fits for all vials |
+| `{contrast_name}.png` | Per-contrast scatter plot for individual Inversion Recovery (IR) and Multi-Echo Spin Echo (MESE) timepoints |
+| `T1_mapping.html` | Inversion Recovery (IR) T1 curve fits for all vials |
+| `T2_mapping.html` | Multi-Echo Spin Echo (MESE) T2 decay fits for all vials |
 
 All files live in `{session}/metrics/plots/`.
+
+---
+
+## Series naming conventions
+
+PhantomKit uses **word-boundary token matching** to classify contrast series automatically. Filenames are matched case-insensitively; the token must not be directly adjacent to alphanumeric characters on either side.
+
+| Series type | Radiology term | Filename token | Example filenames |
+|---|---|---|---|
+| Inversion Recovery | Inversion Recovery (IR), Magnetisation-Prepared Rapid Gradient Echo (MPRAGE) | `ir` | `se_ir_100.nii.gz`, `IR_500.nii.gz` |
+| Multi-Echo Spin Echo | Multi-Echo Spin Echo (MESE), T2-weighted SE | `te` | `t2_se_TE_14.nii.gz`, `TE_80.nii.gz` |
+| T1-weighted / MPRAGE | T1 MPRAGE, T1-Flash | `t1` or `mprage` | `T1.nii.gz`, `MPRAGE.nii.gz` |
+| ADC map | Apparent Diffusion Coefficient | `adc` | `ADC.nii.gz` |
+| FA map | Fractional Anisotropy | `fa` | `FA.nii.gz` |
+
+The **numeric suffix** in IR and MESE filenames is interpreted as the physical parameter value:
+- IR: the inversion time **TI** (ms), e.g. `se_ir_500` → TI = 500 ms
+- MESE: the echo time **TE** (ms), e.g. `t2_se_TE_80` → TE = 80 ms
+
+These values are used as the x-axis in the T1/T2 mapping plots and for fitting the relaxation models.
 
 ---
 
@@ -74,7 +95,7 @@ Reference values live in `template_data/{phantom}/`:
 | File | Contents |
 |---|---|
 | `adc_reference.json` | Per-vial reference ADC values (mm²/s) for vials E–L |
-| `t1t2_reference.json` | Per-vial reference T1 and T2 values (ms) for vials S, D, P, M, C, N, B, T, A, R, O, Q |
+| `t1t2_reference.json` | Per-vial reference T₁ and T₂ relaxation times (ms) from Inversion Recovery and Multi-Echo Spin Echo fits |
 
 Both files share the same JSON structure:
 ```json

@@ -63,6 +63,20 @@ Supported phantoms and their reference data:
 | SPIRIT  | ✓ (vials E–L) | ✓ (12 vials) | ✓ (12 vials) |
 | 120E    | ✓ (all 24 vials) | ✓ (24 vials) | ✓ (24 vials) |
 
+### Series naming conventions
+
+Series sub-directories are classified automatically by **word-boundary token matching** on the folder or file name (case-insensitive). No manual tagging is required.
+
+| Series type | Radiology term | Token match |
+|---|---|---|
+| Inversion Recovery | IR / MPRAGE | `ir` |
+| Multi-Echo Spin Echo | MESE / T2-SE | `te` |
+| T1-weighted | T1 / MPRAGE | `t1` or `mprage` |
+| DWI | Diffusion-weighted | auto-detected via bvec/bval |
+| Reverse phase-encode | B0 field map | paired with DWI |
+
+For IR and MESE series, the **numeric suffix** in the filename is interpreted as the physical parameter: inversion time TI (ms) for IR, and echo time TE (ms) for MESE. Example: `se_ir_500.nii.gz` → TI = 500 ms; `t2_se_TE_80.nii.gz` → TE = 80 ms.
+
 Optional flags:
 
 ```

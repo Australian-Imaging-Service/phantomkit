@@ -511,9 +511,9 @@ def _task_generate_plots(
 
     # ── Per-contrast scatter plots ────────────────────────────────────────────
     for contrast_file in contrast_file_paths:
-        # Skip IR and TE contrasts — covered by T1_mapping and T2_mapping
-        if _matches(contrast_file.stem, "ir") or _matches(contrast_file.stem, "te"):
-            continue
+        is_ir_or_te = (
+            _matches(contrast_file.stem, "ir") or _matches(contrast_file.stem, "te")
+        )
         contrast_name = contrast_file.name
         for _ext in (".nii.gz", ".nii"):
             if contrast_name.endswith(_ext):
@@ -527,9 +527,12 @@ def _task_generate_plots(
             print(f"  ⚠ Mean CSV not found, skipping plot for {contrast_name}")
             continue
 
-        output_plot = str(plots_dir / f"{contrast_name}{ext}")
+        # IR/TE individual contrasts always use PNG — the T1/T2 mapping HTML
+        # covers the full fitted plots; per-TI/TE scatter PNGs save disk space.
+        file_ext = ".png" if is_ir_or_te else ext
+        output_plot = str(plots_dir / f"{contrast_name}{file_ext}")
 
-        if output_format == "html":
+        if output_format == "html" and not is_ir_or_te:
             try:
                 plot_vial_intensity(
                     csv_file=str(mean_csv),
@@ -548,7 +551,7 @@ def _task_generate_plots(
                 print(f"    ✗ HTML plot generation failed for {contrast_name}: {e}")
         else:
             roi_image = None
-            if vial_masks_list:
+            if vial_masks_list and not is_ir_or_te:
                 roi_overlay = _build_roi_overlay(
                     contrast_file, vial_masks_list, contrast_name, tmp_vial_dir
                 )
@@ -631,6 +634,7 @@ def _task_generate_plots(
                     vial_niftis=_vial_niftis_map or None,
                     relaxometry_reference=_relaxometry_ref,
                     phantom=phantom_name,
+                    overlay_contrast=str(first_file) if _t1_bg else None,
                 )
                 print(f"    ✓ Generated {contrast_type_key.upper()} HTML map plot")
             except Exception as e:
@@ -1020,6 +1024,8 @@ class PhantomProcessor:
         with Submitter(worker="cf", cache_root=cache_dir) as sub:
             sub(wf, rerun=True)
 
+        self._run_temperature_analysis(metrics_dir, session_name)
+
         print(f"\n{'=' * 60}")
         print(f"✓ Session {session_name} complete!")
         print(f"  Metrics:               {metrics_dir}")
@@ -1035,3 +1041,64 @@ class PhantomProcessor:
             "images_template_space_dir": str(images_template_space_dir),
             "space_image": str(output_dir / "TemplatePhantom_ScannerSpace.nii.gz"),
         }
+
+    def _run_temperature_analysis(self, metrics_dir: Path, session_name: str) -> None:
+        """Estimate phantom temperature from ADC metrics when calibration data is available.
+
+        Writes an interactive HTML report to ``metrics_dir/plots/``.
+        Silently skips if ADC metrics, calibration LUT, or phantom config are absent.
+        """
+        adc_csv = metrics_dir / "csv" / "ADC_mean_matrix.csv"
+        if not adc_csv.exists():
+            return
+
+        calib_lut = self.template_dir.parent / "DIFFUSION-O-3574_Calibration_GSP_PVP_20220331.xlsx"
+        phantom_cfg_path = self.template_dir.parent / "phantom_config.json"
+
+        if not calib_lut.exists() or not phantom_cfg_path.exists():
+            print("  Temperature estimation skipped: calibration LUT or phantom config not found.")
+            return
+
+        print(f"\n  Running temperature estimation for {session_name}...")
+        try:
+            from phantomkit.plotting.calibration_plotter import (
+                parse_calibration_xlsx,
+                parse_vials_csv,
+                load_phantom_config,
+                build_vial_map,
+                estimate_temperature,
+                build_vials_html,
+            )
+
+            formulations = parse_calibration_xlsx(str(calib_lut))
+            vials_adc = parse_vials_csv(str(adc_csv))
+            phantom_cfg = load_phantom_config(str(phantom_cfg_path))
+            vial_map = build_vial_map(phantom_cfg, self.phantom_name)
+
+            results = []
+            for vial, adc_raw in vials_adc.items():
+                form_query = vial_map.get(vial)
+                if form_query is None:
+                    continue
+                try:
+                    res = estimate_temperature(
+                        formulations, str(form_query), D=adc_raw, vial=vial
+                    )
+                    results.append(res)
+                except ValueError:
+                    pass
+
+            if not results:
+                print("  Temperature estimation: no matching vials found.")
+                return
+
+            plots_dir = metrics_dir / "plots"
+            plots_dir.mkdir(parents=True, exist_ok=True)
+            output_html = plots_dir / f"{self.phantom_name}_temperature_estimates.html"
+            output_html.write_text(
+                build_vials_html(formulations, results, phantom_name=self.phantom_name),
+                encoding="utf-8",
+            )
+            print(f"  ✓ Temperature estimates: {output_html.name}")
+        except Exception as e:
+            print(f"  Temperature estimation failed: {e}")

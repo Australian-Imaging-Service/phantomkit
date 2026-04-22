@@ -175,6 +175,7 @@ ERROR_BAR_PLUGIN_JS = """
 const errorBarPlugin = {
   id: "errorBar",
   afterDatasetsDraw(chart) {
+    if (window._pkShowErrBars === false) return;
     const ctx = chart.ctx;
     chart.data.datasets.forEach((ds, di) => {
       if (!ds.errorBars) return;
@@ -273,6 +274,8 @@ def _niivue_viewer_panel(
     vial_niftis: dict[str, str],
     bg_cal_min: float | None = None,
     bg_cal_max: float | None = None,
+    overlay_nifti: str | None = None,
+    overlay_label: str = "Contrast",
 ) -> tuple[str, str]:
     """Build an embedded NiiVue viewer panel for a static HTML page.
 
@@ -288,6 +291,11 @@ def _niivue_viewer_panel(
         files that exist on disk are included.
     bg_cal_min, bg_cal_max:
         Optional intensity window for the background volume (e.g. 0/0.004 for ADC).
+    overlay_nifti:
+        Optional path to a second image (e.g. first IR/TE contrast) shown as a
+        toggleable "hot" overlay on top of the background.
+    overlay_label:
+        Button label for the overlay toggle (e.g. "IR contrast").
 
     Returns
     -------
@@ -303,6 +311,9 @@ def _niivue_viewer_panel(
         for name, vpath in sorted(vial_niftis.items())
         if vpath and Path(vpath).exists()
     ]
+
+    _has_overlay = bool(overlay_nifti and Path(overlay_nifti).exists())
+    overlay_b64 = nifti_to_base64(overlay_nifti) if _has_overlay else None
 
     chips = "".join(
         f'<button id="pk-chip-{i}" data-active="1" onclick="pkToggleVial({i + 1},this)"'
@@ -322,21 +333,49 @@ def _niivue_viewer_panel(
         else ""
     )
 
+    overlay_btn_html = (
+        f'<button id="pk-overlay-btn" data-active="0" onclick="pkToggleOverlay(this)"'
+        f' style="padding:3px 10px;border-radius:99px;border:1.5px solid var(--border);'
+        f"background:var(--bg3);color:var(--text2);font-size:11px;font-weight:500;"
+        f'cursor:pointer;user-select:none;transition:opacity .15s;opacity:0.55;">'
+        f'{overlay_label}</button>'
+        if _has_overlay
+        else ""
+    )
+
+    _zoom_btn_style = (
+        "padding:3px 8px;border-radius:99px;border:1.5px solid var(--border);"
+        "background:var(--bg3);color:var(--text2);font-size:13px;font-weight:600;"
+        "cursor:pointer;user-select:none;transition:opacity .15s;line-height:1;"
+    )
     html_panel = f"""<div class="chart-card" style="margin-bottom:20px;">
-  <p class="chart-title">MRI Viewer</p>
-  <canvas id="nv-canvas" style="width:100%;height:400px;display:block;background:#000;border-radius:6px;cursor:crosshair;"></canvas>
-  <p style="font-size:11px;color:var(--text2);margin-top:8px;">Scroll to change slice &middot; drag to adjust contrast</p>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+    <p class="chart-title" style="margin:0;">MRI Viewer</p>
+    <div style="display:flex;gap:6px;align-items:center;">
+      {overlay_btn_html}
+      <button onclick="pkZoom(1.25)" style="{_zoom_btn_style}">+</button>
+      <button onclick="pkZoom(1/1.25)" style="{_zoom_btn_style}">&minus;</button>
+      <button id="pk-rad-btn" data-rad="1" onclick="pkToggleRadConvention(this)"
+        style="padding:3px 10px;border-radius:99px;border:1.5px solid var(--border);
+        background:var(--bg3);color:var(--text2);font-size:11px;font-weight:500;
+        cursor:pointer;user-select:none;transition:opacity .15s;">Radiological</button>
+    </div>
+  </div>
+  <canvas id="nv-canvas" style="width:100%;height:300px;display:block;background:#000;border-radius:6px;cursor:crosshair;"></canvas>
+  <p style="font-size:11px;color:var(--text2);margin-top:8px;">Scroll: change slice &middot; Ctrl+scroll or +/&minus;: zoom &middot; drag: adjust contrast &middot; axial / coronal / sagittal</p>
   {chips_section}
 </div>"""
 
     bg_b64_js = json.dumps(bg_b64)
     vials_js = json.dumps(vials_data)
+    overlay_b64_js = json.dumps(overlay_b64)
     cal_min_js = "null" if bg_cal_min is None else str(float(bg_cal_min))
     cal_max_js = "null" if bg_cal_max is None else str(float(bg_cal_max))
 
     js_block = f"""
 var _NV_BG = {bg_b64_js};
 var _NV_VIALS = {vials_js};
+var _NV_OVERLAY = {overlay_b64_js};
 var _NV_CAL_MIN = {cal_min_js};
 var _NV_CAL_MAX = {cal_max_js};
 
@@ -361,17 +400,25 @@ function _pkB64ToUrl(b64) {{
 
 function _pkInitNv(canvas, w, h) {{
   canvas.width = w; canvas.height = h;
-  // Prevent the browser from scrolling the page when the user scrolls over
-  // the canvas — NiiVue's own wheelListener handles slice navigation.
-  // dragMode defaults to 1 (contrast-on-drag); dragMode:2 (pan) would
-  // hijack the wheel for zoom and break slice scrolling.
-  canvas.addEventListener("wheel", function(e) {{ e.preventDefault(); }}, {{ passive: false }});
+  // Ctrl+scroll → zoom via scene.pan2Dxyzmm[3] (the 2-D zoom scale in NiiVue).
+  // Plain scroll is left for NiiVue's own wheelListener (slice navigation).
+  canvas.addEventListener("wheel", function(e) {{
+    e.preventDefault();
+    if ((e.ctrlKey || e.metaKey) && window._pkNv && window._pkNv.scene) {{
+      e.stopPropagation();
+      var factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      window._pkNv.scene.pan2Dxyzmm[3] = Math.max(0.1, window._pkNv.scene.pan2Dxyzmm[3] * factor);
+      window._pkNv.drawScene();
+    }}
+  }}, {{ passive: false }});
   window._pkNv = new niivue.Niivue({{
     isColorbar: false, crosshairWidth: 1, isResizeCanvas: false,
     isAntiAlias: false,
+    multiplanarLayout: 3,
+    multiplanarShowRender: 0,
   }});
   window._pkNv.attachToCanvas(canvas);
-  window._pkNv.opts.sliceType = 0;
+  window._pkNv.opts.sliceType = 3;
   var vols = [{{url: _pkB64ToUrl(_NV_BG), name: "background.nii.gz", colormap: "gray"}}];
   for (var i = 0; i < _NV_VIALS.length; i++) {{
     vols.push({{
@@ -381,7 +428,16 @@ function _pkInitNv(canvas, w, h) {{
       opacity: 0.5,
     }});
   }}
+  if (_NV_OVERLAY !== null) {{
+    vols.push({{
+      url: _pkB64ToUrl(_NV_OVERLAY),
+      name: "contrast_overlay.nii.gz",
+      colormap: "winter",
+      opacity: 0.0,
+    }});
+  }}
   window._pkNv.loadVolumes(vols).then(function() {{
+    window._pkNv.setRadiologicalConvention(true);
     if (_NV_CAL_MIN !== null && _NV_CAL_MAX !== null) {{
       if (typeof window._pkNv.setCalMinMax === "function") {{
         window._pkNv.setCalMinMax(0, _NV_CAL_MIN, _NV_CAL_MAX);
@@ -400,6 +456,29 @@ function pkToggleVial(idx, btn) {{
   btn.dataset.active = wasActive ? "0" : "1";
   btn.style.opacity = wasActive ? "0.35" : "1.0";
   window._pkNv.setOpacity(idx, wasActive ? 0.0 : 0.5);
+}}
+
+function pkToggleOverlay(btn) {{
+  if (!window._pkNv || _NV_OVERLAY === null) return;
+  var wasActive = btn.dataset.active === "1";
+  btn.dataset.active = wasActive ? "0" : "1";
+  btn.style.opacity = wasActive ? "0.55" : "1.0";
+  var overlayIdx = _NV_VIALS.length + 1;
+  window._pkNv.setOpacity(overlayIdx, wasActive ? 0.0 : 0.6);
+}}
+
+function pkZoom(factor) {{
+  if (!window._pkNv || !window._pkNv.scene) return;
+  window._pkNv.scene.pan2Dxyzmm[3] = Math.max(0.1, window._pkNv.scene.pan2Dxyzmm[3] * factor);
+  window._pkNv.drawScene();
+}}
+
+function pkToggleRadConvention(btn) {{
+  if (!window._pkNv) return;
+  var isRad = btn.dataset.rad === "1";
+  btn.dataset.rad = isRad ? "0" : "1";
+  btn.textContent = isRad ? "Neurological" : "Radiological";
+  window._pkNv.setRadiologicalConvention(!isRad);
 }}
 """
     return html_panel, js_block
@@ -427,6 +506,7 @@ def build_relaxometry_html(
     nifti_image: str | None = None,
     vial_niftis: dict | None = None,
     ref_data: dict | None = None,
+    overlay_contrast: str | None = None,
 ) -> str:
     """Build the interactive HTML for a relaxometry (IR or TE) plot.
 
@@ -458,6 +538,9 @@ def build_relaxometry_html(
          "ci_upper": list or None, "ci_lower": list or None}
     embedded_data : dict
         Data to embed as machine-readable JSON in the HTML.
+    overlay_contrast : str, optional
+        Path to a NIfTI file (e.g. first IR or TE image) to offer as a
+        toggleable "hot" overlay in the MRI viewer.
     """
     import numpy as np
 
@@ -717,9 +800,12 @@ const _REF_VIALS = {_vial_labels_json};
         if ref_data is not None:
             _ref_set = {v.upper() for v in ref_data.get("vials", [])}
             _viewer_vials = {k: v for k, v in _viewer_vials.items() if k.upper() in _ref_set}
+        _overlay_label = "IR contrast" if fit_key == "T1_ms" else "TE contrast"
         viewer_html, viewer_js = _niivue_viewer_panel(
             nifti_image,  # type: ignore[arg-type]
             _viewer_vials,
+            overlay_nifti=overlay_contrast,
+            overlay_label=_overlay_label,
         )
     else:
         viewer_html = viewer_js = ""
@@ -746,6 +832,10 @@ const _REF_VIALS = {_vial_labels_json};
 <div class="chart-grid">
 {chart_cards_html}
 </div>
+<p style="font-size:11px;color:var(--text2);margin:2px 0 18px;padding:0 4px;">
+  Error bars: &plusmn;1 SD of voxel intensities within vial ROI &nbsp;&middot;&nbsp;
+  Shaded band: 95&thinsp;% CI of fitted curve
+</p>
 
 {ref_chart_html}
 

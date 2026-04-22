@@ -16,12 +16,15 @@ Stages
            Runs once per DWI series produced by Stage 1.
            Input image: T1_in_DWI_space.nii.gz from Stage 1.
            ADC and FA files in the same folder are picked up automatically.
+           Temperature estimation runs automatically after this stage when
+           ADC metrics are available.
 
   Stage 3  Phantom QC on native contrasts  (phantomkit.phantom_processor)
            Runs if the input directory contains IR and/or TE series.
            All contrast DICOMs (T1, IR, TE) are converted to NIfTI into a
            temporary staging folder; the phantom processor then registers
            the T1 and extracts vial metrics from every NIfTI present.
+           Temperature estimation runs automatically if ADC is present.
 
 Usage
 -----
@@ -713,14 +716,9 @@ def main():
         print_header("STAGE 2 — Phantom QC in DWI Space")
         print("  Skipped: Stage 1 did not run.\n")
 
-    # Stage 4 — Calibration temperature estimation (follows Stage 2)
-    if run_stage1_flag:
-        run_calibration_plot(dwi_output_dirs, output_dir, phantom, args.dry_run)
-    else:
-        print_header("STAGE 4 — Calibration Temperature Estimation")
-        print("  Skipped: Stage 1 did not run.\n")
-
     # Stage 3 — Phantom QC on native contrasts
+    # (Temperature estimation runs automatically inside PhantomProcessor after
+    #  Stage 2 and Stage 3 whenever ADC metrics are available.)
     if run_stage3_flag:
         run_stage3(input_dir, output_dir, template_dir, scan_info, args.dry_run)
     else:

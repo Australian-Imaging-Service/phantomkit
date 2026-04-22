@@ -66,10 +66,14 @@ def _load_embedded(html_path: str) -> dict:
     return json.loads(m.group(1))
 
 
-def _extract(data: dict) -> tuple[str, list[str], dict[str, float | None]]:
-    """Return (metric_key, vials_in_order, {vial_upper: value_or_None}).
+def _extract(
+    data: dict,
+) -> tuple[str, list[str], dict[str, float | None], dict[str, float | None]]:
+    """Return (metric_key, vials_in_order, {vial_upper: value_or_None}, {vial_upper: se_or_None}).
 
     metric_key is one of: "ADC", "FA", "Intensity", "T1", "T2".
+    se_vals contains the curve-fit standard error of the fitted relaxation time
+    (T1_se_ms or T2_se_ms) for T1/T2 types; empty dict for ADC/FA/Intensity.
     """
     dtype = data.get("type", "")
 
@@ -87,27 +91,31 @@ def _extract(data: dict) -> tuple[str, list[str], dict[str, float | None]]:
             return float(m) if m is not None else None
 
         vals = {v.upper(): _scalar(m) for v, m in zip(vials, means)}
-        return metric, vials, vals
+        return metric, vials, vals, {}
 
     if dtype == "maps_ir":
         fit_results = data.get("fit_results", [])
-        vials_order, vals = [], {}
+        vials_order, vals, se_vals = [], {}, {}
         for r in fit_results:
             v = r.get("Vial", "")
             t1 = r.get("T1_ms")
+            se = r.get("T1_se_ms")
             vals[v.upper()] = float(t1) if t1 is not None else None
+            se_vals[v.upper()] = float(se) if se is not None else None
             vials_order.append(v)
-        return "T1", vials_order, vals
+        return "T1", vials_order, vals, se_vals
 
     if dtype == "maps_te":
         fit_results = data.get("fit_results", [])
-        vials_order, vals = [], {}
+        vials_order, vals, se_vals = [], {}, {}
         for r in fit_results:
             v = r.get("Vial", "")
             t2 = r.get("T2_ms")
+            se = r.get("T2_se_ms")
             vals[v.upper()] = float(t2) if t2 is not None else None
+            se_vals[v.upper()] = float(se) if se is not None else None
             vials_order.append(v)
-        return "T2", vials_order, vals
+        return "T2", vials_order, vals, se_vals
 
     raise click.ClickException(
         f"Unknown embedded data type {dtype!r}. "
@@ -259,7 +267,7 @@ _Y_LABELS: dict[str, str] = {
 def _build_html(
     metric: str,
     vial_axis: list[str],
-    sessions: list[dict],       # [{label, color, vials_order, vals}]
+    sessions: list[dict],       # [{label, color, vials_order, vals, se_vals}]
     ref_vals: dict[str, float], # {vial_upper: value}
 ) -> str:
     from phantomkit.plotting._html_common import html_head
@@ -292,11 +300,11 @@ def _build_html(
     ]
     has_ref = bool(ref_pts)
 
-    sessions_json   = json.dumps(session_datasets)
-    ref_pts_json    = json.dumps(ref_pts)
+    sessions_json    = json.dumps(session_datasets)
+    ref_pts_json     = json.dumps(ref_pts)
     vial_labels_json = json.dumps(vial_axis)
-    y_label_json    = json.dumps(y_label)
-    ref_color_json  = json.dumps(_REFERENCE_COLOR)
+    y_label_json     = json.dumps(y_label)
+    ref_color_json   = json.dumps(_REFERENCE_COLOR)
 
     # -- Session control rows (toggle button + include-in-mean checkbox)
     session_controls_html = ""
@@ -375,7 +383,6 @@ const gridCol  = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.07)";
 const tickCol  = "#888780";
 const MEAN_COLOR = isDark ? "#e0e0e0" : "#222222";
 
-// Update mean-swatch colour to match
 document.getElementById("pk-mean-swatch").style.background = MEAN_COLOR;
 
 // ---------------------------------------------------------------------------
@@ -391,8 +398,8 @@ SESSIONS.forEach(function(sess) {{
     borderColor: sess.color,
     pointBackgroundColor: sess.color,
     pointBorderColor: sess.color,
-    pointRadius: 9,
-    pointHoverRadius: 11,
+    pointRadius: 6,
+    pointHoverRadius: 8,
     pointStyle: "circle",
     showLine: false,
     borderWidth: 0,
@@ -408,14 +415,14 @@ datasets.push({{
   pointBackgroundColor: "transparent",
   pointBorderColor: REF_COLOR,
   pointBorderWidth: 2.5,
-  pointRadius: 11,
-  pointHoverRadius: 13,
+  pointRadius: 8,
+  pointHoverRadius: 10,
   pointStyle: "circle",
   showLine: false,
   borderWidth: 0,
 }});
 
-// Group mean — filled squares (index = datasets.length before push)
+// Group mean — filled squares
 const MEAN_IDX = datasets.length;
 datasets.push({{
   label: "Group Mean",
@@ -424,8 +431,8 @@ datasets.push({{
   borderColor: MEAN_COLOR,
   pointBackgroundColor: MEAN_COLOR,
   pointBorderColor: MEAN_COLOR,
-  pointRadius: 11,
-  pointHoverRadius: 13,
+  pointRadius: 8,
+  pointHoverRadius: 10,
   pointStyle: "rect",
   showLine: false,
   borderWidth: 0,
@@ -475,7 +482,7 @@ const chart = new Chart(
           grid: {{ color: gridCol }},
         }}
       }}
-    }}
+    }},
   }}
 );
 
@@ -504,12 +511,13 @@ function pkUpdateMean() {{
       byX[pt.x].push(pt.y);
     }});
   }});
-  const meanPts = Object.keys(byX)
-    .map(function(x) {{
+  const meanPts = [];
+  Object.keys(byX).map(Number).sort(function(a,b){{return a-b;}})
+    .forEach(function(x) {{
       const ys = byX[x];
-      return {{ x: Number(x), y: ys.reduce(function(a, b) {{ return a + b; }}, 0) / ys.length }};
-    }})
-    .sort(function(a, b) {{ return a.x - b.x; }});
+      const mu = ys.reduce(function(a,b){{return a+b;}}, 0) / ys.length;
+      meanPts.push({{ x: x, y: mu }});
+    }});
   chart.data.datasets[MEAN_IDX].data = meanPts;
   chart.update();
 }}
@@ -572,7 +580,7 @@ def main(
     metrics_seen: list[str] = []
     for path in html_files:
         data = _load_embedded(path)
-        metric, vials_order, vals = _extract(data)
+        metric, vials_order, vals, se_vals = _extract(data)
         metrics_seen.append(metric)
         sessions_raw.append({
             "path": path,
@@ -580,6 +588,7 @@ def main(
             "metric": metric,
             "vials_order": vials_order,
             "vals": vals,
+            "se_vals": se_vals,
         })
 
     # ---- Validate that all inputs share the same metric
@@ -606,6 +615,7 @@ def main(
             "color": colors[i],
             "vials_order": sessions_raw[i]["vials_order"],
             "vals": sessions_raw[i]["vals"],
+            "se_vals": sessions_raw[i].get("se_vals", {}),
         }
         for i in range(len(html_files))
     ]

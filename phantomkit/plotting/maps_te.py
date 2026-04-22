@@ -125,6 +125,7 @@ def plot_vial_te_means_std(
     fits_output: str | None = None,
     relaxometry_reference: dict | None = None,
     phantom: str | None = None,
+    overlay_contrast: str | None = None,
 ):
     """
     Create interactive HTML or publication-quality PNG plots of vial intensity
@@ -224,7 +225,11 @@ def plot_vial_te_means_std(
                 S0_fit, T2_fit = popt
                 fit_signal = mono_exp(contrast_numbers, *popt)
                 r2 = calc_r2(mean_matrix[i, :], fit_signal)
-                fit_results.append({"Vial": vial, "S0": S0_fit, "T2_ms": T2_fit, "R2": r2})
+                try:
+                    T2_se: float | None = float(np.sqrt(pcov[1, 1])) if np.isfinite(pcov[1, 1]) else None
+                except Exception:
+                    T2_se = None
+                fit_results.append({"Vial": vial, "S0": S0_fit, "T2_ms": T2_fit, "T2_se_ms": T2_se, "R2": r2})
 
                 x_fit = np.linspace(0, max(contrast_numbers), 200)
                 y_fit = mono_exp(x_fit, *popt)
@@ -265,8 +270,12 @@ def plot_vial_te_means_std(
                     S0_fit, T2_fit = popt
                     fit_signal = mono_exp(contrast_numbers, *popt)
                     r2 = calc_r2(mean_matrix[i, :], fit_signal)
+                    try:
+                        T2_se = float(np.sqrt(pcov[1, 1])) if np.isfinite(pcov[1, 1]) else None
+                    except Exception:
+                        T2_se = None
                     fit_results.append(
-                        {"Vial": vial, "S0": S0_fit, "T2_ms": T2_fit, "R2": r2}
+                        {"Vial": vial, "S0": S0_fit, "T2_ms": T2_fit, "T2_se_ms": T2_se, "R2": r2}
                     )
 
                     x_fit = np.linspace(0, max(contrast_numbers), 200)
@@ -334,6 +343,7 @@ def plot_vial_te_means_std(
             nifti_image=nifti_image,
             vial_niftis=vial_niftis,
             ref_data=relaxometry_reference,
+            overlay_contrast=overlay_contrast,
         )
 
         from pathlib import Path
