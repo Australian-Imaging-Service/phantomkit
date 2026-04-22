@@ -21,18 +21,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 
-# ---------- FSL via official conda-based installer ----------
+# ---------- FSL via conda environment spec ----------
+# Bypasses the FSL installer (which requires sudo for system PATH setup).
+# Downloads miniforge to get conda/mamba, creates the FSL env from FSL's
+# own published yml spec, then removes miniforge to save space.
 # Downloads ~7 GB; includes eddy, topup, flirt, and related tools.
-RUN wget -qO /tmp/fslinstaller.py \
-        https://fsl.fmrib.ox.ac.uk/fsldownloads/fslconda/releases/fslinstaller.py \
-    && python3 /tmp/fslinstaller.py -d /opt/fsl --skip_registration \
-    && rm /tmp/fslinstaller.py
+ARG FSL_VERSION=6.0.7.22
+RUN curl -fsSL \
+        "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh" \
+        -o /tmp/miniforge.sh \
+    && bash /tmp/miniforge.sh -b -p /opt/conda \
+    && rm /tmp/miniforge.sh
+
+RUN /opt/conda/bin/conda env create -p /opt/fsl \
+        -f "https://fsl.fmrib.ox.ac.uk/fsldownloads/fslconda/releases/fsl-${FSL_VERSION}_linux-64.yml" \
+    && /opt/conda/bin/conda clean --all -y \
+    && rm -rf /opt/conda
 
 ENV FSLDIR=/opt/fsl \
     FSLOUTPUTTYPE=NIFTI_GZ \
     FSLMULTIFILEQUIT=TRUE
 ENV PATH="${FSLDIR}/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${FSLDIR}/lib:${LD_LIBRARY_PATH:-}"
+ENV LD_LIBRARY_PATH="/opt/fsl/lib"
 
 # ---------- ANTs pre-compiled binary ----------
 RUN curl -fsSL \
@@ -56,7 +66,7 @@ RUN curl -fsSL \
 # ---------- phantomkit (editable install preserves template_data lookup) ----------
 WORKDIR /opt/phantomkit
 COPY . .
-RUN pip install --no-cache-dir -e .
+RUN /opt/venv/bin/pip install --no-cache-dir -e .
 
 # ---------- Runtime ----------
 WORKDIR /data
