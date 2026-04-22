@@ -132,6 +132,56 @@ def _detect_series_format(series_dir: Path) -> str:
     return "dicom"
 
 
+_FLAT_IMAGE_EXTS = (".nii.gz", ".nii", ".mif.gz", ".mif")
+_SIDECAR_EXTS = (".bvec", ".bval", ".json")
+
+
+def _wrap_flat_inputs(input_dir: Path, output_dir: Path) -> Path:
+    """
+    If input_dir contains flat NIfTI/MIF files rather than subdirectories,
+    stage them into per-stem subdirectories under output_dir/_staged_input/
+    so scan_input_dir can classify them by name.  Existing subdirectories
+    and sidecar files (.bvec/.bval/.json) are also linked in.
+    Returns the staged path, or input_dir unchanged if no flat images found.
+    """
+    flat_files = [
+        f
+        for f in sorted(input_dir.iterdir())
+        if f.is_file() and any(f.name.endswith(ext) for ext in _FLAT_IMAGE_EXTS)
+    ]
+    if not flat_files:
+        return input_dir
+
+    staged = output_dir / "_staged_input"
+    staged.mkdir(parents=True, exist_ok=True)
+
+    for d in sorted(input_dir.iterdir()):
+        if d.is_dir():
+            link = staged / d.name
+            if not link.exists():
+                link.symlink_to(d)
+
+    for img in flat_files:
+        stem = img.name
+        for ext in sorted(_FLAT_IMAGE_EXTS, key=len, reverse=True):
+            if stem.endswith(ext):
+                stem = stem[: -len(ext)]
+                break
+        sub = staged / stem
+        sub.mkdir(exist_ok=True)
+        img_link = sub / img.name
+        if not img_link.exists():
+            img_link.symlink_to(img)
+        for sc_ext in _SIDECAR_EXTS:
+            sc = input_dir / (stem + sc_ext)
+            if sc.exists():
+                sc_link = sub / sc.name
+                if not sc_link.exists():
+                    sc_link.symlink_to(sc)
+
+    return staged
+
+
 def stage_series_dir(series_dir: Path, out_dir: Path) -> list:
     """
     Stage a series directory into out_dir as .nii.gz files.
@@ -636,6 +686,7 @@ def main():
 
     validate_inputs(args)
     output_dir.mkdir(parents=True, exist_ok=True)
+    input_dir = _wrap_flat_inputs(input_dir, output_dir)
 
     dwi_cfg = {
         "denoise_degibbs": args.denoise_degibbs,

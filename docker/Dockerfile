@@ -63,6 +63,10 @@ RUN curl -fsSL \
     && install -m 755 /tmp/dcm2niix/dcm2niix /usr/local/bin/dcm2niix \
     && rm -rf /tmp/dcm2niix.zip /tmp/dcm2niix
 
+# Polyfill for imp module removed in Python 3.12 (needed by apt MRtrix3 scripts).
+# Placed here so edits to the polyfill don't invalidate the expensive FSL layer.
+COPY docker/imp_polyfill.py /usr/lib/python3/dist-packages/imp.py
+
 # ---------- phantomkit (editable install preserves template_data lookup) ----------
 WORKDIR /opt/phantomkit
 COPY . .
