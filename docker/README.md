@@ -18,18 +18,25 @@ A self-contained image for running the phantomkit MRI phantom QA pipeline, bundl
 
 ---
 
-## Building the image
+## Building and pushing the image
 
-Run from the **repository root**:
+The image targets both `linux/amd64` (Linux servers) and `linux/arm64` (Apple Silicon). Use `buildx` to build and push in one step.
 
 ```bash
-docker build -f docker/Dockerfile -t phantomkit:latest .
+docker login
+docker buildx create --use
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f docker/Dockerfile \
+  -t arkiev/phantomkit:latest \
+  -t arkiev/phantomkit:0.1.8 \
+  --push .
 ```
 
-To pin a specific tag:
+For a local-only build (single platform, no push):
 
 ```bash
-docker build -f docker/Dockerfile -t phantomkit:0.1.8 .
+docker build -f docker/Dockerfile -t arkiev/phantomkit:latest .
 ```
 
 ---
@@ -90,45 +97,10 @@ Any additional paths can be mounted with `-v`.
 
 ---
 
-## Pushing to Docker Hub
-
-1. **Log in:**
-
-   ```bash
-   docker login
-   ```
-
-2. **Tag the image** (replace `yourusername` with your Docker Hub username):
-
-   ```bash
-   docker tag phantomkit:latest yourusername/phantomkit:latest
-   docker tag phantomkit:latest yourusername/phantomkit:0.1.8
-   ```
-
-3. **Push:**
-
-   ```bash
-   docker push yourusername/phantomkit:latest
-   docker push yourusername/phantomkit:0.1.8
-   ```
-
-4. **Pull on another machine:**
-
-   ```bash
-   docker pull yourusername/phantomkit:latest
-   ```
-
-### Optional: multi-platform build for sharing (Apple Silicon + x86)
-
-If you build on an Apple Silicon Mac and want the image to run on Linux servers:
+## Pulling on another machine
 
 ```bash
-docker buildx create --use
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -f docker/Dockerfile \
-  -t yourusername/phantomkit:latest \
-  --push .
+docker pull arkiev/phantomkit:latest
 ```
 
 ---
