@@ -124,7 +124,7 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
 
     def _callback(**kwargs):
         input_val: str = kwargs.pop("input")
-        plugin: str = kwargs.pop("plugin")
+        worker: str = kwargs.pop("worker")
         pattern: str = kwargs.pop("pattern")
         # Convert click tuples (from multiple=True) to lists
         wf_kwargs = {
@@ -161,7 +161,7 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
 
         from pydra.engine import Submitter
 
-        with Submitter(plugin=plugin) as sub:
+        with Submitter(worker=worker) as sub:
             sub(wf)
         logger.info("Done.")
 
@@ -189,11 +189,11 @@ def _build_command(slug: str, single_cls, batch_cls) -> click.Command:
     # Common options
     click_params += [
         click.Option(
-            ["--plugin"],
+            ["--worker"],
             type=click.Choice(["cf", "serial"]),
             default="cf",
             show_default=True,
-            help="Pydra execution plugin.",
+            help="Pydra worker type.",
         ),
         click.Option(
             ["--pattern"],
@@ -301,5 +301,218 @@ _register_commands()
 _register_plot_commands()
 
 
-if __name__ == "__main__":
-    main()
+# ---------------------------------------------------------------------------
+# View command — NiceGUI MRI viewer
+# ---------------------------------------------------------------------------
+
+
+@main.command("view")
+@click.argument("nifti_image", metavar="NIFTI")
+@click.option(
+    "--vials",
+    "vials_dir",
+    default=None,
+    metavar="DIR",
+    help="Directory containing vial ROI NIfTI masks (.nii.gz).",
+)
+@click.option("--title", default="MRI Viewer", show_default=True)
+@click.option(
+    "--port", default=8080, show_default=True, help="TCP port for the NiceGUI server."
+)
+def view_mri(nifti_image: str, vials_dir: str | None, title: str, port: int) -> None:
+    """Launch an interactive MRI viewer for a NIfTI image.
+
+    NIFTI is the path to the background .nii or .nii.gz file.
+
+    Use --vials to specify a directory of vial ROI masks that can be
+    toggled on/off as overlays.
+    """
+    from phantomkit.plotting.viewer import launch_viewer
+
+    vial_niftis: dict[str, str] = {}
+    if vials_dir:
+        vials_path = Path(vials_dir)
+        for p in sorted(vials_path.glob("*.nii.gz")):
+            name = p.name.replace(".nii.gz", "").replace(".nii", "")
+            vial_niftis[name] = str(p)
+
+    launch_viewer(
+        nifti_image=nifti_image,
+        vial_niftis=vial_niftis or None,
+        title=title,
+        port=port,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline command — end-to-end phantom QC + DWI orchestrator
+# ---------------------------------------------------------------------------
+
+
+@main.command("pipeline")
+@click.option(
+    "--input-dir",
+    required=True,
+    help="Root directory containing acquisition subdirectories (DICOM folders).",
+)
+@click.option(
+    "--output-dir",
+    required=True,
+    help="Top-level output directory. All results are written here.",
+)
+@click.option(
+    "--phantom",
+    required=True,
+    help="Phantom name, e.g. SPIRIT. Used to locate template_data/<phantom>/.",
+)
+@click.option(
+    "--denoise-degibbs",
+    is_flag=True,
+    default=False,
+    help="Apply dwidenoise + mrdegibbs before preprocessing.",
+)
+@click.option(
+    "--gradcheck",
+    is_flag=True,
+    default=False,
+    help="Run dwigradcheck to verify gradient orientations.",
+)
+@click.option(
+    "--nocleanup",
+    is_flag=True,
+    default=False,
+    help="Keep DWI tmp/ intermediate directories.",
+)
+@click.option(
+    "--readout-time",
+    type=float,
+    default=None,
+    help="Override TotalReadoutTime (seconds) for dwifslpreproc.",
+)
+@click.option(
+    "--eddy-options",
+    type=str,
+    default=None,
+    help="Override FSL eddy options string.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Plan and print commands; do not execute any processing.",
+)
+def run_pipeline(
+    input_dir,
+    output_dir,
+    phantom,
+    denoise_degibbs,
+    gradcheck,
+    nocleanup,
+    readout_time,
+    eddy_options,
+    dry_run,
+):
+    """Run the end-to-end phantom QC + DWI processing pipeline.
+
+    Orchestrates DWI preprocessing (Stage 1), phantom QC in DWI space
+    (Stage 2), and phantom QC on native T1/IR/TE contrasts (Stage 3).
+    Stages 1 and 3 run in parallel; Stage 2 follows Stage 1.
+
+    INPUT_DIR should contain acquisition subdirectories (DICOM folders).
+    """
+    import sys
+    from pathlib import Path
+    from phantomkit.pipeline import (
+        scan_input_dir,
+        validate_inputs,
+        run_stage1,
+        run_stage2,
+        run_stage3,
+        print_header,
+        TEMPLATE_DATA_ROOT,
+    )
+    import concurrent.futures
+    import threading
+
+    # Build a minimal args-like namespace so validate_inputs() can be reused
+    class _Args:
+        pass
+
+    _args = _Args()
+    _args.input_dir = input_dir
+    _args.output_dir = output_dir
+    _args.phantom = phantom
+
+    validate_inputs(_args)
+
+    input_path = Path(input_dir).resolve()
+    output_path = Path(output_dir).resolve()
+    template_dir = TEMPLATE_DATA_ROOT / phantom
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    dwi_cfg = {
+        "denoise_degibbs": denoise_degibbs,
+        "gradcheck": gradcheck,
+        "nocleanup": nocleanup,
+        "readout_time": readout_time,
+        "eddy_options": eddy_options,
+    }
+
+    print_header("Input Directory Scan")
+    scan_info = scan_input_dir(input_path)
+
+    run_stage1_flag = scan_info["has_dwi"]
+    run_stage3_flag = bool(scan_info["t1_dirs"]) and (
+        scan_info["has_native_contrasts"] or not run_stage1_flag
+    )
+
+    _print_lock = threading.Lock()
+
+    def _locked_header(title):
+        with _print_lock:
+            print_header(title)
+
+    dwi_output_dirs = []
+    stage1_error = stage3_error = None
+
+    def _s1():
+        nonlocal dwi_output_dirs, stage1_error
+        try:
+            if run_stage1_flag:
+                dwi_output_dirs[:] = run_stage1(
+                    input_path, output_path, dwi_cfg, dry_run
+                )
+            else:
+                _locked_header("STAGE 1 — DWI Processing")
+                print("  Skipped: no DWI acquisitions found.\n")
+        except Exception as exc:
+            stage1_error = exc
+
+    def _s3():
+        nonlocal stage3_error
+        try:
+            if run_stage3_flag:
+                run_stage3(input_path, output_path, template_dir, scan_info, dry_run)
+            else:
+                _locked_header("STAGE 3 — Phantom QC on Native Contrasts")
+                print("  Skipped.\n")
+        except Exception as exc:
+            stage3_error = exc
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        concurrent.futures.wait([executor.submit(_s1), executor.submit(_s3)])
+
+    if stage1_error:
+        raise click.ClickException(f"Stage 1 failed: {stage1_error}")
+    if stage3_error:
+        raise click.ClickException(f"Stage 3 failed: {stage3_error}")
+
+    if run_stage1_flag:
+        run_stage2(dwi_output_dirs, output_path, template_dir, dry_run)
+    else:
+        print_header("STAGE 2 — Phantom QC in DWI Space")
+        print("  Skipped: Stage 1 did not run.\n")
+
+    print_header("Pipeline Complete")
+    print(f"  All outputs written to: {output_path}\n")
