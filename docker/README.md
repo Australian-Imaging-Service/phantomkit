@@ -18,28 +18,13 @@ A self-contained image for running the phantomkit MRI phantom QA pipeline, bundl
 
 ---
 
-## Building and pushing the image
-
-The image targets both `linux/amd64` (Linux servers) and `linux/arm64` (Apple Silicon). Use `buildx` to build and push in one step.
+## Pulling on another machine
 
 ```bash
-docker login
-docker buildx create --use
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -f docker/Dockerfile \
-  -t arkiev/phantomkit:latest \
-  -t arkiev/phantomkit:0.1.8 \
-  --push .
+docker pull arkiev/phantomkit:latest
 ```
-
-For a local-only build (single platform, no push):
-
-```bash
-docker build -f docker/Dockerfile -t arkiev/phantomkit:latest .
-```
-
 ---
+
 
 ## Running the container
 
@@ -84,6 +69,30 @@ docker run --rm -it \
 docker run --rm phantomkit:latest --help
 ```
 
+## Building and pushing the image
+
+The image targets both `linux/amd64` (Linux servers) and `linux/arm64` (Apple Silicon). Use `buildx` to build and push in one step.
+
+```bash
+docker login
+docker buildx create --use
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f docker/Dockerfile \
+  -t arkiev/phantomkit:latest \
+  -t arkiev/phantomkit:0.1.8 \
+  --push .
+```
+
+For a local-only build (single platform, no push):
+
+```bash
+docker build -f docker/Dockerfile -t arkiev/phantomkit:latest .
+```
+
+---
+
+
 ---
 
 ## Volume mounts
@@ -97,11 +106,6 @@ Any additional paths can be mounted with `-v`.
 
 ---
 
-## Pulling on another machine
-
-```bash
-docker pull arkiev/phantomkit:latest
-```
 
 ---
 
