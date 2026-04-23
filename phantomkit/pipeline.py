@@ -747,7 +747,7 @@ def main():
         print("  NOTE: --dry-run is active.  No processing will be performed.\n")
 
     # ── Execution ─────────────────────────────────────────────────────────────
-    # Stages run sequentially: 1 → 2 → 3.
+    # Stages run sequentially: 1 → 2 → 3 → 4.
     # (Stage 1 shells out to dwifslpreproc/eddy which are already multi-threaded;
     # Stage 3 runs ANTs which is also multi-threaded. Parallel execution of
     # stages gives no wall-time benefit and produces interleaved output.)
@@ -768,8 +768,6 @@ def main():
         print("  Skipped: Stage 1 did not run.\n")
 
     # Stage 3 — Phantom QC on native contrasts
-    # (Temperature estimation runs automatically inside PhantomProcessor after
-    #  Stage 2 and Stage 3 whenever ADC metrics are available.)
     if run_stage3_flag:
         run_stage3(input_dir, output_dir, template_dir, scan_info, args.dry_run)
     else:
@@ -778,6 +776,13 @@ def main():
             print("  Skipped: no T1 directory found.\n")
         else:
             print("  Skipped: no IR or TE series found, and DWI pipeline was run.\n")
+
+    # Stage 4 — Calibration temperature estimation (requires Stage 1/2 ADC output)
+    if run_stage1_flag:
+        run_calibration_plot(dwi_output_dirs, output_dir, phantom, args.dry_run)
+    else:
+        print_header("STAGE 4 — Calibration Temperature Estimation")
+        print("  Skipped: no DWI acquisitions found.\n")
 
     # ── Summary ───────────────────────────────────────────────────────────────
     print_header("Pipeline Complete")
