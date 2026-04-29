@@ -279,6 +279,32 @@ def _task_transform_vials(
     return transformed
 
 
+def _compute_voxel_stats(
+    vol_file: str, mask_file: str
+) -> dict:
+    """Dump masked voxels and compute p25/p75/mean_mad/median_mad in one mrdump call."""
+    import numpy as _np
+
+    nan = float("nan")
+    result = {"p25": nan, "p75": nan, "mean_mad": nan, "median_mad": nan}
+    try:
+        r = subprocess.run(
+            ["mrdump", vol_file, "-mask", mask_file],
+            capture_output=True, text=True, check=True,
+        )
+        raw = r.stdout.strip().split()
+        if not raw:
+            return result
+        vals = _np.array([float(x) for x in raw], dtype=float)
+        result["p25"] = float(_np.percentile(vals, 25))
+        result["p75"] = float(_np.percentile(vals, 75))
+        result["mean_mad"] = float(_np.mean(_np.abs(vals - vals.mean())))
+        result["median_mad"] = float(_np.mean(_np.abs(vals - _np.median(vals))))
+    except Exception:
+        pass
+    return result
+
+
 @python.define(outputs=["sentinel"])
 def _task_extract_metrics(
     contrast_files: list,
@@ -347,11 +373,8 @@ def _task_extract_metrics(
         )
 
         metrics_data: Dict[str, Dict[str, List[float]]] = {
-            "mean": {},
-            "median": {},
-            "std": {},
-            "min": {},
-            "max": {},
+            "mean": {}, "median": {}, "std": {}, "min": {}, "max": {},
+            "count": {}, "p25": {}, "p75": {}, "mean_mad": {}, "median_mad": {},
         }
 
         for vial_mask in active_vials:
@@ -404,21 +427,10 @@ def _task_extract_metrics(
                     subprocess.run(cmd, check=True, capture_output=True)
 
                 cmd = [
-                    "mrstats",
-                    "-quiet",
-                    vol_file,
-                    "-output",
-                    "mean",
-                    "-output",
-                    "median",
-                    "-output",
-                    "std",
-                    "-output",
-                    "min",
-                    "-output",
-                    "max",
-                    "-mask",
-                    regridded_mask,
+                    "mrstats", "-quiet", vol_file,
+                    "-output", "mean", "-output", "median", "-output", "std",
+                    "-output", "min", "-output", "max", "-output", "count",
+                    "-mask", regridded_mask,
                 ]
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 if result.returncode != 0 or not result.stdout.strip():
@@ -431,12 +443,20 @@ def _task_extract_metrics(
                 metrics_data["std"][vial_name].append(float(values[2]))
                 metrics_data["min"][vial_name].append(float(values[3]))
                 metrics_data["max"][vial_name].append(float(values[4]))
+                metrics_data["count"][vial_name].append(float(values[5]))
+                _vstats = _compute_voxel_stats(vol_file, regridded_mask)
+                metrics_data["p25"][vial_name].append(_vstats["p25"])
+                metrics_data["p75"][vial_name].append(_vstats["p75"])
+                metrics_data["mean_mad"][vial_name].append(_vstats["mean_mad"])
+                metrics_data["median_mad"][vial_name].append(_vstats["median_mad"])
 
         xlsx_dir = metrics_dir / "xlsx"
         xlsx_dir.mkdir(parents=True, exist_ok=True)
         xlsx_file = xlsx_dir / f"{clean_contrast_name}.xlsx"
+        sheet_order = ["mean", "median", "std", "min", "max", "count", "p25", "p75", "mean_mad", "median_mad"]
         with pd.ExcelWriter(xlsx_file, engine="openpyxl") as writer:
-            for metric_name, vial_data in metrics_data.items():
+            for metric_name in sheet_order:
+                vial_data = metrics_data[metric_name]
                 rows = [
                     {"vial": vn, **{f"vol{i}": v for i, v in enumerate(vals)}}
                     for vn, vals in vial_data.items()
@@ -601,10 +621,6 @@ def _task_generate_plots(
             f for f in contrast_file_paths if _matches(f.stem, contrast_type_key)
         ]
         if not matching:
-            print(
-                f"  No {contrast_type_key.upper()} contrasts found "
-                f"(searched for '{contrast_type_key}' in filenames)"
-            )
             continue
 
         print(
@@ -997,17 +1013,17 @@ class PhantomProcessor:
         print(f"{'=' * 60}\n")
 
         # Gather contrast files before starting the workflow (deterministic glob)
-        contrast_files = [
+        contrast_files = sorted(
             str(f)
             for f in input_path.parent.glob("*.nii.gz")
             if f.name != "TemplatePhantom_ScannerSpace.nii.gz"
-        ]
+        )
 
         wf = PhantomSessionWf(
             input_image=input_image,
             template_phantom=str(self.template_phantom),
             vial_masks=[str(m) for m in self.vial_masks],
-            adc_vials=list(self.adc_vials),
+            adc_vials=sorted(self.adc_vials),
             output_prefix=str(tmp_dir / f"{session_name}_Transformed_"),
             output_dir_str=str(output_dir),
             session_name=session_name,
@@ -1017,8 +1033,25 @@ class PhantomProcessor:
             output_format=self.output_format,
         )
         cache_dir = str(output_dir / ".pydra_cache")
-        with Submitter(worker="cf", cache_root=cache_dir) as sub:
+        sub = Submitter(worker="cf", cache_root=cache_dir)
+        try:
             sub(wf, rerun=True)
+        finally:
+            # Cancel any pending asyncio tasks before closing the event loop.
+            # Pydra's ConcurrentFuturesWorker leaves tasks pending after the
+            # workflow completes; without this, Python 3.12 logs
+            # "Task was destroyed but it is pending!" for each one.
+            import asyncio as _asyncio
+            _loop = sub.loop
+            if _loop and not _loop.is_closed():
+                _pending = _asyncio.all_tasks(_loop)
+                if _pending:
+                    for _t in _pending:
+                        _t.cancel()
+                    _loop.run_until_complete(
+                        _asyncio.gather(*_pending, return_exceptions=True)
+                    )
+            sub.close()
 
         self._run_temperature_analysis(metrics_dir, session_name)
 

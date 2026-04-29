@@ -35,15 +35,30 @@ _MEANS = {
 
 
 def _write_mean_std_csvs(metrics_dir: Path, base_name: str, scale: float = 1.0) -> None:
-    """Write a per-contrast xlsx with mean and std sheets."""
-    means = [_MEANS[v] * scale for v in _VIALS]
-    stds = [m * 0.05 for m in means]
-    df_mean = pd.DataFrame({"vial": _VIALS, "value": means})
-    df_std = pd.DataFrame({"vial": _VIALS, "value": stds})
+    """Write a per-contrast xlsx with all 8 metric sheets."""
+    means = np.array([_MEANS[v] * scale for v in _VIALS], dtype=float)
+    stds = means * 0.05
+    counts = np.full(len(_VIALS), 1000.0)
+    p25 = means * 0.92
+    p75 = means * 1.08
+    mins = means * 0.80
+    maxs = means * 1.20
+    medians = means * 1.01
+
     xlsx_path = metrics_dir / f"{base_name}.xlsx"
+    mean_mad   = means * 0.04   # ~4% of mean as mean MAD
+    median_mad = means * 0.035  # ~3.5% as median MAD
+
     with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
-        df_mean.to_excel(writer, sheet_name="mean", index=False)
-        df_std.to_excel(writer, sheet_name="std", index=False)
+        for sheet_name, vals in [
+            ("mean", means), ("std", stds), ("median", medians),
+            ("count", counts), ("p25", p25), ("p75", p75),
+            ("min", mins), ("max", maxs),
+            ("mean_mad", mean_mad), ("median_mad", median_mad),
+        ]:
+            pd.DataFrame({"vial": _VIALS, "vol0": vals}).to_excel(
+                writer, sheet_name=sheet_name, index=False
+            )
 
 
 def _write_vial_intensity_csv(path: Path, n_vols: int = 1) -> None:

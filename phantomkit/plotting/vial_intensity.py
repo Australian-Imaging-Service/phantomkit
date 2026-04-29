@@ -143,6 +143,14 @@ def _build_vial_intensity_html(
     vials: list,
     display_values: np.ndarray,
     display_stds,
+    display_medians=None,
+    display_counts=None,
+    display_p25=None,
+    display_p75=None,
+    display_mins=None,
+    display_maxs=None,
+    display_mean_mad=None,
+    display_median_mad=None,
     n_vols: int,
     contrast_mode: str,
     ref_data: dict | None,
@@ -158,6 +166,9 @@ def _build_vial_intensity_html(
     from phantomkit.plotting._html_common import (
         html_head,
         ERROR_BAR_PLUGIN_JS,
+        PK_CONTROLS_HTML,
+        PK_TOGGLE_JS,
+        _compute_pk_err_bounds,
         base_opts_js,
         phantomkit_data_tag,
         chart_color,
@@ -186,15 +197,37 @@ def _build_vial_intensity_html(
     else:
         viewer_html = viewer_js = ""
 
+    # ---- Compute PK_DATA for measure/error-bar toggles --------------------
+    import numpy as _np
+    _med      = display_medians    if display_medians    is not None else display_values
+    _cnt      = display_counts     if display_counts     is not None else _np.full_like(display_values, 1000.0)
+    _p25      = display_p25        if display_p25        is not None else (display_values - (_np.zeros_like(display_values) if display_stds is None else display_stds))
+    _p75      = display_p75        if display_p75        is not None else (display_values + (_np.zeros_like(display_values) if display_stds is None else display_stds))
+    _mn       = display_mins       if display_mins       is not None else _p25
+    _mx       = display_maxs       if display_maxs       is not None else _p75
+    _std      = display_stds       if display_stds       is not None else _np.zeros_like(display_values)
+    _mean_mad  = display_mean_mad  if display_mean_mad   is not None else None
+    _med_mad   = display_median_mad if display_median_mad is not None else None
+
+    # Shape is (n_vials, n_vols); transpose to (n_vols, n_vials) so _row = vol_idx
+    pk_err_bounds = _compute_pk_err_bounds(
+        display_values.T, _med.T, _std.T, _cnt.T, _p25.T, _p75.T, _mn.T, _mx.T,
+        mean_mad_m=_mean_mad.T if _mean_mad is not None else None,
+        median_mad_m=_med_mad.T if _med_mad is not None else None,
+    )
+    pk_data_json = json.dumps({
+        "measure": {
+            "mean":   display_values.T.tolist(),
+            "median": _med.T.tolist(),
+        },
+        "errBounds": pk_err_bounds,
+    })
+
     # ---- Build Chart.js datasets -------------------------------------------
     datasets = []
     for vol_idx in range(n_vols):
         means = display_values[:, vol_idx].tolist()
-        stds = (
-            display_stds[:, vol_idx].tolist()
-            if display_stds is not None
-            else None
-        )
+        stds = _std[:, vol_idx].tolist() if display_stds is not None else None
 
         if contrast_mode == "adc":
             color = "#378ADD"  # blue filled circles for measured ADC
@@ -205,6 +238,7 @@ def _build_vial_intensity_html(
 
         scatter_ds = {
             "label": vol_label,
+            "_row": vol_idx,
             "data": [{"x": j, "y": means[j]} for j in range(len(vials))],
             "borderColor": color,
             "backgroundColor": color + "33",
@@ -217,10 +251,7 @@ def _build_vial_intensity_html(
         }
         if stds is not None:
             scatter_ds["errorBars"] = {
-                str(j): {
-                    "yMin": means[j] - stds[j],
-                    "yMax": means[j] + stds[j],
-                }
+                str(j): {"yMin": means[j] - stds[j], "yMax": means[j] + stds[j]}
                 for j in range(len(vials))
             }
         datasets.append(scatter_ds)
@@ -259,24 +290,16 @@ def _build_vial_intensity_html(
     y_label_json = json.dumps(y_label)
 
     data_tag = phantomkit_data_tag(embedded_data)
-    opts_js = base_opts_js(x_label="Vial", y_label=y_label, enable_zoom=False)
+    opts_js = base_opts_js(x_label="Vial", y_label=y_label, enable_zoom=True)
     head = html_head(title, include_niivue=_has_viewer)
 
-    # Always show one tick per vial position
     tick_step_js = "opts.scales.x.ticks.stepSize = 1;"
-
-    # FA y-axis constraint JS
-    fa_ylim_js = ""
-    if contrast_mode == "fa":
-        fa_ylim_js = "opts.scales.y.min = 0; opts.scales.y.max = 1;"
-
-    # ADC mode: show legend to distinguish measured vs reference
-    adc_legend_js = ""
-    if contrast_mode == "adc":
-        adc_legend_js = (
-            "opts.plugins.legend.display = true;"
-            " opts.plugins.legend.labels = { color: '#888780', font: { size: 12 } };"
-        )
+    fa_ylim_js = "opts.scales.y.min = 0; opts.scales.y.max = 1;" if contrast_mode == "fa" else ""
+    adc_legend_js = (
+        "opts.plugins.legend.display = true;"
+        " opts.plugins.legend.labels = { color: '#888780', font: { size: 12 } };"
+        if contrast_mode == "adc" else ""
+    )
 
     return f"""{head}
 <body>
@@ -285,6 +308,8 @@ def _build_vial_intensity_html(
 
 {viewer_html}
 
+{PK_CONTROLS_HTML}
+
 <div class="chart-card">
   <div class="chart-title">{title}</div>
   <div class="chart-wrap" style="height:340px"><canvas id="intensityChart"></canvas></div>
@@ -292,8 +317,8 @@ def _build_vial_intensity_html(
 
 <div class="stats-section">
   <div class="stats-title">Per-vial values</div>
-  <table class="stats-table">
-    <thead><tr><th>Vial</th><th>Mean</th><th>Std</th></tr></thead>
+  <table class="stats-table" id="statsTable">
+    <thead><tr id="statsHead"><th>Vial</th><th>Mean</th><th>&plusmn;SD</th></tr></thead>
     <tbody id="statsBody"></tbody>
   </table>
 </div>
@@ -303,8 +328,11 @@ def _build_vial_intensity_html(
 <script>
 const VIALS = {vials_json};
 const DATASETS = {datasets_json};
+const PK_DATA = {pk_data_json};
+const N_VOLS = {n_vols};
 
 {ERROR_BAR_PLUGIN_JS}
+{PK_TOGGLE_JS}
 {opts_js}
 
 const opts = baseOpts("Vial", {y_label_json});
@@ -318,20 +346,33 @@ const chart = new Chart(
   document.getElementById("intensityChart").getContext("2d"),
   {{ type: "line", data: {{ datasets: DATASETS }}, options: opts, plugins: [errorBarPlugin] }}
 );
+_pkCharts.push(chart);
 document.getElementById("intensityChart").addEventListener("dblclick", () => chart.resetZoom());
 
+function pkUpdateStatsTable() {{
+  const m = window._pkMeasure, e = window._pkErrMode;
+  const vals = PK_DATA.measure[m][0];
+  const errLabel = e === "none" ? "None" : e === "sd" ? "±SD" : e === "se" ? "±SE"
+    : e === "2se" ? "±2·SE" : e === "mad" ? "±MAD" : e === "iqr" ? "IQR [Q25–Q75]" : "Min–Max";
+  document.getElementById("statsHead").innerHTML =
+    `<th>Vial</th><th>${{m === "mean" ? "Mean" : "Median"}}</th><th>${{errLabel}}</th>`;
+  const tbody = document.getElementById("statsBody");
+  tbody.innerHTML = "";
+  VIALS.forEach((v, j) => {{
+    let errStr = "—";
+    if (e !== "none" && PK_DATA.errBounds[m] && PK_DATA.errBounds[m][e]) {{
+      const lo = PK_DATA.errBounds[m][e].lower[0][j];
+      const hi = PK_DATA.errBounds[m][e].upper[0][j];
+      errStr = `[${{lo.toFixed(4)}}, ${{hi.toFixed(4)}}]`;
+    }}
+    tbody.innerHTML += `<tr><td>${{v}}</td><td>${{(vals[j] ?? 0).toFixed(4)}}</td><td>${{errStr}}</td></tr>`;
+  }});
+}}
+
+window._pkAfterUpdate = pkUpdateStatsTable;
+pkUpdateStatsTable();
+
 {viewer_js}
-
-// Populate stats table
-const tbody = document.getElementById("statsBody");
-VIALS.forEach((v, j) => {{
-  const ds0 = DATASETS[0];
-  const mean = ds0.data[j]?.y ?? "";
-  const eb = ds0.errorBars?.[j];
-  const std = eb ? ((eb.yMax - eb.yMin) / 2).toFixed(4) : "";
-  tbody.innerHTML += `<tr><td>${{v}}</td><td>${{typeof mean === "number" ? mean.toFixed(4) : mean}}</td><td>${{std}}</td></tr>`;
-}});
-
 </script>
 </body>
 </html>"""
@@ -466,8 +507,6 @@ def plot_vial_intensity(
     else:
         contrast_mode = "generic"
 
-    print(f"[INFO] Contrast mode detected: {contrast_mode}")
-
     # ---- Validate: ADC mode needs phantom + template_dir -------------------
     if contrast_mode == "adc":
         if not phantom:
@@ -480,7 +519,8 @@ def plot_vial_intensity(
             )
 
     # ---- Load mean data -----------------------------------------------------
-    if Path(csv_file).suffix.lower() == ".xlsx":
+    _is_xlsx = Path(csv_file).suffix.lower() == ".xlsx"
+    if _is_xlsx:
         mean_df = pd.read_excel(csv_file, sheet_name="mean")
     else:
         sep = detect_separator(csv_file)
@@ -494,11 +534,27 @@ def plot_vial_intensity(
     mean_values = mean_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
     n_vols = mean_values.shape[1]
 
-    # ---- Load std data (from xlsx sheet or separate csv) -------------------
+    # ---- Load std / extra sheets -------------------------------------------
     std_values = None
-    if Path(csv_file).suffix.lower() == ".xlsx":
+    median_values = count_values = p25_values = p75_values = None
+    min_values = max_values = mean_mad_values = median_mad_values = None
+    if _is_xlsx:
         std_df = pd.read_excel(csv_file, sheet_name="std")
-        std_values = std_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
+        std_values = std_df.iloc[:, 1:].to_numpy()
+        try:
+            median_values     = pd.read_excel(csv_file, sheet_name="median").iloc[:, 1:].to_numpy()
+            count_values      = pd.read_excel(csv_file, sheet_name="count").iloc[:, 1:].to_numpy()
+            p25_values        = pd.read_excel(csv_file, sheet_name="p25").iloc[:, 1:].to_numpy()
+            p75_values        = pd.read_excel(csv_file, sheet_name="p75").iloc[:, 1:].to_numpy()
+            min_values        = pd.read_excel(csv_file, sheet_name="min").iloc[:, 1:].to_numpy()
+            max_values        = pd.read_excel(csv_file, sheet_name="max").iloc[:, 1:].to_numpy()
+        except Exception:
+            pass  # older xlsx without extra sheets — graceful degradation
+        try:
+            mean_mad_values   = pd.read_excel(csv_file, sheet_name="mean_mad").iloc[:, 1:].to_numpy()
+            median_mad_values = pd.read_excel(csv_file, sheet_name="median_mad").iloc[:, 1:].to_numpy()
+        except Exception:
+            pass  # older xlsx without MAD sheets
     elif std_csv:
         sep_std = detect_separator(std_csv)
         std_df = pd.read_csv(std_csv, sep=sep_std)
@@ -521,14 +577,35 @@ def plot_vial_intensity(
         mean_values = mean_values[mask.values]
         if std_values is not None:
             std_values = std_values[mask.values]
+        if median_values is not None:
+            median_values = median_values[mask.values]
+        if count_values is not None:
+            count_values = count_values[mask.values]
+        if p25_values is not None:
+            p25_values = p25_values[mask.values]
+        if p75_values is not None:
+            p75_values = p75_values[mask.values]
+        if min_values is not None:
+            min_values = min_values[mask.values]
+        if max_values is not None:
+            max_values = max_values[mask.values]
+        if mean_mad_values is not None:
+            mean_mad_values = mean_mad_values[mask.values]
+        if median_mad_values is not None:
+            median_mad_values = median_mad_values[mask.values]
 
     # ---- In ADC mode, scale measured values to ×10⁻³ for display ----------
-    display_values = mean_values * 1e3 if contrast_mode == "adc" else mean_values
-    display_stds = (
-        std_values * 1e3
-        if (contrast_mode == "adc" and std_values is not None)
-        else std_values
-    )
+    _scale = 1e3 if contrast_mode == "adc" else 1.0
+    display_values      = mean_values * _scale
+    display_stds        = std_values        * _scale if std_values        is not None else None
+    display_medians     = median_values     * _scale if median_values     is not None else None
+    display_counts      = count_values               if count_values      is not None else None
+    display_p25         = p25_values        * _scale if p25_values        is not None else None
+    display_p75         = p75_values        * _scale if p75_values        is not None else None
+    display_mins        = min_values        * _scale if min_values        is not None else None
+    display_maxs        = max_values        * _scale if max_values        is not None else None
+    display_mean_mad    = mean_mad_values   * _scale if mean_mad_values   is not None else None
+    display_median_mad  = median_mad_values * _scale if median_mad_values is not None else None
 
     # ---- Build axis labels and title ---------------------------------------
     phantom_label = f"{phantom} Phantom – " if phantom else ""
@@ -563,6 +640,14 @@ def plot_vial_intensity(
             vials=list(vials),
             display_values=display_values,
             display_stds=display_stds,
+            display_medians=display_medians,
+            display_counts=display_counts,
+            display_p25=display_p25,
+            display_p75=display_p75,
+            display_mins=display_mins,
+            display_maxs=display_maxs,
+            display_mean_mad=display_mean_mad,
+            display_median_mad=display_median_mad,
             n_vols=n_vols,
             contrast_mode=contrast_mode,
             ref_data=ref_data,
@@ -576,7 +661,6 @@ def plot_vial_intensity(
         )
 
         Path(output_file).write_text(html, encoding="utf-8")
-        print(f"[INFO] Interactive HTML saved to: {output_file}")
         return output_file
 
     # ========================================================================
@@ -716,7 +800,6 @@ def plot_vial_intensity(
     plt.tight_layout()
     output_file = os.path.abspath(output)
     plt.savefig(output_file, bbox_inches="tight", dpi=300)
-    print(f"[INFO] Plot saved to: {output_file}")
     plt.close(fig)
     return output_file
 

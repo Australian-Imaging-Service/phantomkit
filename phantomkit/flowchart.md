@@ -38,7 +38,7 @@ flowchart TD
         REG -->|transform_matrix| VIALS["②  antsApplyTransforms<br/>vial masks → subject space"]
         REG -->|transform_matrix| FWDXFM["⑤  antsApplyTransforms<br/>all contrasts → template space"]
 
-        VIALS -->|vial_paths| METRICS["③  mrgrid + mrstats<br/>per-vial mean / median / std / min / max<br/>→ CSV files"]
+        VIALS -->|vial_paths| METRICS["③  mrgrid + mrstats + mrdump<br/>per-vial mean / median / std / min / max / count<br/>p25 / p75  (via mrdump + numpy.percentile)<br/>mean_mad / median_mad  (via mrdump + numpy)<br/>→ xlsx (one sheet per metric)"]
         REFDATA[/"template_data/{phantom}/<br/>adc_reference.json<br/>t1t2_reference.json<br/>(SPIRIT: 12 vials · 120E: 24 vials)"/]
         REFDATA --> PLOTS
         METRICS -->|sentinel| PLOTS["④  plot_vial_intensity<br/>plot_vial_ir_means_std  ← if IR series present<br/>plot_vial_te_means_std  ← if TE series present<br/>→ Interactive HTML<br/>   (NiiVue viewer + Chart.js)<br/>   PNG fallback available"]

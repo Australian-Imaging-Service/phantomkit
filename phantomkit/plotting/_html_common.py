@@ -165,6 +165,24 @@ _CSS = """
   }
   .stats-table td { padding: 5px 10px; border-bottom: 0.5px solid var(--border); }
   .stats-table tr:last-child td { border-bottom: none; }
+  /* Measure / error-bar toggle controls */
+  .pk-controls {
+    display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 14px;
+    align-items: center; padding: 8px 12px;
+    background: var(--bg2); border-radius: 8px; border: 0.5px solid var(--border);
+  }
+  .pk-ctrl-group { display: flex; align-items: center; gap: 4px; }
+  .pk-ctrl-label {
+    font-size: 11px; color: var(--text2); margin-right: 6px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .pk-btn {
+    padding: 3px 10px; font-size: 12px; border: 1px solid var(--border);
+    border-radius: 4px; background: transparent; color: var(--text2);
+    cursor: pointer; transition: background 0.1s, color 0.1s, border-color 0.1s; line-height: 1.5;
+  }
+  .pk-btn.active { background: #378ADD; color: #fff; border-color: #378ADD; }
+  .pk-btn:hover:not(.active) { border-color: #888; color: var(--text); }
 """
 
 # ---------------------------------------------------------------------------
@@ -187,6 +205,7 @@ const errorBarPlugin = {
         const x = el.x, cap = 4;
         const yMin = chart.scales.y.getPixelForValue(eb.yMin);
         const yMax = chart.scales.y.getPixelForValue(eb.yMax);
+        if (!isFinite(yMin) || !isFinite(yMax)) return;
         ctx.beginPath();
         ctx.moveTo(x, yMin); ctx.lineTo(x, yMax);
         ctx.moveTo(x-cap, yMin); ctx.lineTo(x+cap, yMin);
@@ -198,6 +217,150 @@ const errorBarPlugin = {
   }
 };
 """
+
+
+PK_CONTROLS_HTML = """\
+<div class="pk-controls">
+  <div class="pk-ctrl-group">
+    <span class="pk-ctrl-label">Measure</span>
+    <button class="pk-btn pk-measure-btn active" onclick="pkSetMeasure('mean',this)">Mean</button>
+    <button class="pk-btn pk-measure-btn" onclick="pkSetMeasure('median',this)">Median</button>
+  </div>
+  <div class="pk-ctrl-group">
+    <span class="pk-ctrl-label">Error bars</span>
+    <button class="pk-btn pk-err-btn active" onclick="pkSetErrMode('sd',this)">&plusmn;SD</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('se',this)">&plusmn;SE</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('2se',this)">&plusmn;2&thinsp;SE</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('mad',this)">&plusmn;MAD</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('iqr',this)">IQR</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('minmax',this)">Min&ndash;Max</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('none',this)">None</button>
+  </div>
+</div>"""
+
+PK_CONTROLS_HTML_WITH_LEGEND = """\
+<div class="pk-controls">
+  <div class="pk-ctrl-group">
+    <span class="pk-ctrl-label">Measure</span>
+    <button class="pk-btn pk-measure-btn active" onclick="pkSetMeasure('mean',this)">Mean</button>
+    <button class="pk-btn pk-measure-btn" onclick="pkSetMeasure('median',this)">Median</button>
+  </div>
+  <div class="pk-ctrl-group">
+    <span class="pk-ctrl-label">Error bars</span>
+    <button class="pk-btn pk-err-btn active" onclick="pkSetErrMode('sd',this)">&plusmn;SD</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('se',this)">&plusmn;SE</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('2se',this)">&plusmn;2&thinsp;SE</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('mad',this)">&plusmn;MAD</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('iqr',this)">IQR</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('minmax',this)">Min&ndash;Max</button>
+    <button class="pk-btn pk-err-btn" onclick="pkSetErrMode('none',this)">None</button>
+  </div>
+  <div class="pk-ctrl-group">
+    <span class="pk-ctrl-label">Legend</span>
+    <button class="pk-btn" id="pk-legend-btn" onclick="pkToggleLegend(this)">Show</button>
+  </div>
+</div>"""
+
+PK_TOGGLE_JS = """
+window._pkMeasure = "mean";
+window._pkErrMode = "sd";
+window._pkShowLegend = false;
+window._pkAfterUpdate = null;
+var _pkCharts = [];
+
+function pkSetMeasure(mode, btn) {
+  window._pkMeasure = mode;
+  document.querySelectorAll(".pk-measure-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  pkUpdateAllCharts();
+}
+
+function pkSetErrMode(mode, btn) {
+  window._pkErrMode = mode;
+  document.querySelectorAll(".pk-err-btn").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  pkUpdateAllCharts();
+}
+
+function pkToggleLegend(btn) {
+  window._pkShowLegend = !window._pkShowLegend;
+  btn.textContent = window._pkShowLegend ? "Hide" : "Show";
+  btn.classList.toggle("active", window._pkShowLegend);
+  _pkCharts.forEach(ch => {
+    ch.options.plugins.legend.display = window._pkShowLegend;
+    ch.update("none");
+  });
+}
+
+function pkUpdateAllCharts() {
+  const m = window._pkMeasure, e = window._pkErrMode;
+  _pkCharts.forEach(ch => {
+    ch.data.datasets.forEach((ds, di) => {
+      if (ds._row !== undefined) {
+        const vals = PK_DATA.measure[m][ds._row];
+        ds.data.forEach((pt, k) => { pt.y = vals[k]; });
+        const eb = (e !== "none" && PK_DATA.errBounds[m] && PK_DATA.errBounds[m][e]);
+        if (eb) {
+          const lo = PK_DATA.errBounds[m][e].lower[ds._row];
+          const hi = PK_DATA.errBounds[m][e].upper[ds._row];
+          ds.errorBars = {};
+          lo.forEach((l, k) => { ds.errorBars[String(k)] = { yMin: l, yMax: hi[k] }; });
+        } else {
+          ds.errorBars = {};
+        }
+      }
+      if (ds._fit_measure !== undefined) {
+        ch.setDatasetVisibility(di, ds._fit_measure === m);
+      }
+      if (ds._refMeas && typeof _REF_MEAS !== "undefined") {
+        const pts = _REF_MEAS[m];
+        ds.data.length = 0;
+        pts.forEach(p => ds.data.push(p));
+      }
+    });
+    ch.update("none");
+  });
+  // Toggle fit results tables (relaxometry plots only)
+  document.querySelectorAll(".pk-fit-table").forEach(el => {
+    el.style.display = (el.dataset.measure === m) ? "" : "none";
+  });
+  if (typeof window._pkAfterUpdate === "function") window._pkAfterUpdate();
+}
+"""
+
+
+def _compute_pk_err_bounds(
+    mean_m, median_m, std_m, count_m, p25_m, p75_m, min_m, max_m,
+    mean_mad_m=None, median_mad_m=None,
+) -> dict:
+    """Compute all error bound variants for embedding in HTML.
+
+    All inputs are numpy arrays of the same shape (n_rows, n_cols).
+    Returns a dict keyed by measure → variant → {lower, upper} lists.
+    """
+    import numpy as np
+
+    se_m = std_m / np.sqrt(np.maximum(count_m, 1.0))
+    _mean_mad  = mean_mad_m   if mean_mad_m   is not None else std_m
+    _median_mad = median_mad_m if median_mad_m is not None else std_m
+
+    def _b(lo, hi):
+        return {"lower": lo.tolist(), "upper": hi.tolist()}
+
+    result = {}
+    for key, vals, mad in (
+        ("mean",   mean_m,   _mean_mad),
+        ("median", median_m, _median_mad),
+    ):
+        result[key] = {
+            "sd":     _b(vals - std_m,     vals + std_m),
+            "se":     _b(vals - se_m,      vals + se_m),
+            "2se":    _b(vals - 2 * se_m,  vals + 2 * se_m),
+            "mad":    _b(vals - mad,        vals + mad),
+            "iqr":    _b(p25_m,            p75_m),
+            "minmax": _b(min_m,            max_m),
+        }
+    return result
 
 
 def base_opts_js(
@@ -234,7 +397,14 @@ function baseOpts(xLabel, yLabel) {{
   return {{
     responsive: true, maintainAspectRatio: false,
     plugins: {{
-      legend: {{ display: false }},
+      legend: {{
+        display: false,
+        onClick: null,
+        labels: {{
+          filter: (item, data) => data.datasets[item.datasetIndex]._row !== undefined,
+          color: "#888780", font: {{ size: 11 }}
+        }}
+      }},
       tooltip: {{ callbacks: {{ label: ctx => `${{ctx.dataset.label}}: ${{ctx.parsed.y.toFixed(2)}}` }} }},
 {zoom_plugin}
     }},
@@ -503,6 +673,16 @@ def build_relaxometry_html(
     vial_labels: list,
     subplot_fits: list,
     embedded_data: dict,
+    subplot_fits_median: list | None = None,
+    fit_results_median: list | None = None,
+    median_matrix=None,
+    count_matrix=None,
+    p25_matrix=None,
+    p75_matrix=None,
+    min_matrix=None,
+    max_matrix=None,
+    mean_mad_matrix=None,
+    median_mad_matrix=None,
     nifti_image: str | None = None,
     vial_niftis: dict | None = None,
     ref_data: dict | None = None,
@@ -549,11 +729,70 @@ def build_relaxometry_html(
     # (contrast_numbers may be a numpy array of int64 or float64)
     x_arr = [float(x) for x in contrast_numbers]
 
+    # Fall back to mean-based proxies when optional matrices are absent
+    _median     = median_matrix     if median_matrix     is not None else mean_matrix
+    _count      = count_matrix      if count_matrix      is not None else np.ones_like(mean_matrix) * 1000
+    _p25        = p25_matrix        if p25_matrix        is not None else mean_matrix - std_matrix
+    _p75        = p75_matrix        if p75_matrix        is not None else mean_matrix + std_matrix
+    _min        = min_matrix        if min_matrix        is not None else mean_matrix - std_matrix
+    _max        = max_matrix        if max_matrix        is not None else mean_matrix + std_matrix
+    _mean_mad   = mean_mad_matrix   if mean_mad_matrix   is not None else None
+    _median_mad = median_mad_matrix if median_mad_matrix is not None else None
+
+    # Pre-compute all error bound variants for the toggle controls
+    pk_err_bounds = _compute_pk_err_bounds(
+        mean_matrix, _median, std_matrix, _count, _p25, _p75, _min, _max,
+        mean_mad_m=_mean_mad, median_mad_m=_median_mad,
+    )
+    pk_data_json = json.dumps({
+        "measure": {
+            "mean":   mean_matrix.tolist(),
+            "median": _median.tolist(),
+        },
+        "errBounds": pk_err_bounds,
+    })
+
+    # Helper: build CI band + fit line datasets tagged with a measure
+    def _fit_datasets_for(fit_entry_, color_, measure_):
+        dsets = []
+        if not fit_entry_ or not fit_entry_.get("x_fit"):
+            return dsets
+        xf_ = fit_entry_["x_fit"]
+        yf_ = fit_entry_["y_fit"]
+        ci_lo_ = fit_entry_.get("ci_lower")
+        ci_hi_ = fit_entry_.get("ci_upper")
+        if ci_hi_ and ci_lo_:
+            dsets.append({
+                "label": "_ci_upper", "_fit_measure": measure_,
+                "data": [{"x": xf_[k], "y": ci_hi_[k]} for k in range(len(xf_))],
+                "borderColor": "transparent", "backgroundColor": color_ + "22",
+                "pointRadius": 0, "borderWidth": 0, "showLine": True,
+                "tension": 0.3, "fill": "+1",
+            })
+            dsets.append({
+                "label": "_ci_lower", "_fit_measure": measure_,
+                "data": [{"x": xf_[k], "y": ci_lo_[k]} for k in range(len(xf_))],
+                "borderColor": "transparent", "backgroundColor": "transparent",
+                "pointRadius": 0, "borderWidth": 0, "showLine": True,
+                "tension": 0.3, "fill": False,
+            })
+        dsets.append({
+            "label": fit_label, "_fit_measure": measure_,
+            "data": [{"x": xf_[k], "y": yf_[k]} for k in range(len(xf_))],
+            "borderColor": color_ + "bb", "backgroundColor": "transparent",
+            "pointRadius": 0, "borderWidth": 1.5, "borderDash": [4, 3],
+            "showLine": True, "tension": 0.3, "fill": False,
+        })
+        return dsets
+
+    _have_median_fits = subplot_fits_median is not None
+
     # Build per-subplot Chart.js dataset lists
     subplot_datasets = []
     for g_idx, group in enumerate(vial_groups):
         group_datasets = []
         group_fits_this = [f for f in subplot_fits if f["vial"] in group]
+        group_fits_med  = [f for f in (subplot_fits_median or []) if f["vial"] in group]
 
         for j, vial in enumerate(group):
             if vial not in vial_to_idx:
@@ -566,6 +805,7 @@ def build_relaxometry_html(
 
             scatter_ds = {
                 "label": f"Vial {vial}",
+                "_row": row,
                 "data": [{"x": x_arr[k], "y": means[k]} for k in range(len(x_arr))],
                 "borderColor": color,
                 "backgroundColor": color + "33",
@@ -581,61 +821,16 @@ def build_relaxometry_html(
             }
             group_datasets.append(scatter_ds)
 
-            # Fitted curve + CI band for this vial
+            # Mean fit datasets (always present; tagged so toggle can hide them)
             fit_entry = next((f for f in group_fits_this if f["vial"] == vial), None)
-            if fit_entry and fit_entry.get("x_fit"):
-                xf = fit_entry["x_fit"]
-                yf = fit_entry["y_fit"]
-                ci_lo = fit_entry.get("ci_lower")
-                ci_hi = fit_entry.get("ci_upper")
+            group_datasets.extend(_fit_datasets_for(
+                fit_entry, color, "mean" if _have_median_fits else None
+            ))
 
-                if ci_hi and ci_lo:
-                    # Upper CI line — fills to the next dataset (lower CI)
-                    group_datasets.append(
-                        {
-                            "label": "_ci_upper",
-                            "data": [
-                                {"x": xf[k], "y": ci_hi[k]} for k in range(len(xf))
-                            ],
-                            "borderColor": "transparent",
-                            "backgroundColor": color + "22",
-                            "pointRadius": 0,
-                            "borderWidth": 0,
-                            "showLine": True,
-                            "tension": 0.3,
-                            "fill": "+1",
-                        }
-                    )
-                    group_datasets.append(
-                        {
-                            "label": "_ci_lower",
-                            "data": [
-                                {"x": xf[k], "y": ci_lo[k]} for k in range(len(xf))
-                            ],
-                            "borderColor": "transparent",
-                            "backgroundColor": "transparent",
-                            "pointRadius": 0,
-                            "borderWidth": 0,
-                            "showLine": True,
-                            "tension": 0.3,
-                            "fill": False,
-                        }
-                    )
-
-                group_datasets.append(
-                    {
-                        "label": fit_label,
-                        "data": [{"x": xf[k], "y": yf[k]} for k in range(len(xf))],
-                        "borderColor": color + "bb",
-                        "backgroundColor": "transparent",
-                        "pointRadius": 0,
-                        "borderWidth": 1.5,
-                        "borderDash": [4, 3],
-                        "showLine": True,
-                        "tension": 0.3,
-                        "fill": False,
-                    }
-                )
+            # Median fit datasets (only when median fits were computed)
+            if _have_median_fits:
+                med_fit_entry = next((f for f in group_fits_med if f["vial"] == vial), None)
+                group_datasets.extend(_fit_datasets_for(med_fit_entry, color, "median"))
 
         subplot_datasets.append(group_datasets)
 
@@ -650,8 +845,8 @@ def build_relaxometry_html(
     x_min_plot = 0.0
     x_max_plot = float(np.max(contrast_numbers)) * 1.05  # 5 % right padding
 
-    y_lower = float((mean_matrix - std_matrix).min())
-    y_upper = float((mean_matrix + std_matrix).max())
+    y_lower = float(np.minimum(_p25, mean_matrix - std_matrix).min())
+    y_upper = float(np.maximum(_p75, mean_matrix + std_matrix).max())
     for _fit in subplot_fits:
         for _key in ("y_fit", "ci_lower", "ci_upper"):
             if _fit.get(_key):
@@ -676,40 +871,54 @@ def build_relaxometry_html(
     )
 
     # ------------------------------------------------------------------
-    # Fit-results table (T1 / T2 per vial)
+    # Fit-results table(s) (T1 / T2 per vial)
     # ------------------------------------------------------------------
     fit_results = embedded_data.get("fit_results", [])
     fit_unit_label = "T\u2081 (ms)" if fit_key == "T1_ms" else "T\u2082 (ms)"
-    if fit_results:
-        fit_rows_html = ""
-        for r in sorted(fit_results, key=lambda r: r.get(fit_key) or 0, reverse=True):
+
+    def _fit_table_body(results):
+        rows = ""
+        for r in sorted(results, key=lambda r: r.get(fit_key) or 0, reverse=True):
             vial = r.get("Vial", "")
             t_val = r.get(fit_key, "")
             s0_val = r.get("S0", "")
             r2_val = r.get("R2", "")
             t_str = f"{t_val:.1f}" if isinstance(t_val, (int, float)) else str(t_val)
-            s0_str = (
-                f"{s0_val:.1f}" if isinstance(s0_val, (int, float)) else str(s0_val)
-            )
-            r2_str = (
-                f"{r2_val:.4f}" if isinstance(r2_val, (int, float)) else str(r2_val)
-            )
-            fit_rows_html += (
-                f"    <tr>"
-                f"<td>{vial}</td>"
-                f"<td>{t_str}</td>"
-                f"<td>{s0_str}</td>"
-                f"<td>{r2_str}</td>"
-                f"</tr>\n"
-            )
-        fits_table_html = f"""<div class="stats-section">
+            s0_str = f"{s0_val:.1f}" if isinstance(s0_val, (int, float)) else str(s0_val)
+            r2_str = f"{r2_val:.4f}" if isinstance(r2_val, (int, float)) else str(r2_val)
+            rows += f"    <tr><td>{vial}</td><td>{t_str}</td><td>{s0_str}</td><td>{r2_str}</td></tr>\n"
+        return rows
+
+    if fit_results:
+        _mean_rows = _fit_table_body(fit_results)
+        if fit_results_median:
+            _med_rows = _fit_table_body(fit_results_median)
+            fits_table_html = f"""<div class="stats-section">
+  <div class="stats-title">Relaxometry Fit Results</div>
+  <div class="pk-fit-table" data-measure="mean">
+  <table class="stats-table">
+    <thead><tr><th>Vial</th><th>{fit_unit_label} (mean fit)</th><th>S0</th><th>R\u00b2</th></tr></thead>
+    <tbody>
+{_mean_rows}    </tbody>
+  </table>
+  </div>
+  <div class="pk-fit-table" data-measure="median" style="display:none">
+  <table class="stats-table">
+    <thead><tr><th>Vial</th><th>{fit_unit_label} (median fit)</th><th>S0</th><th>R\u00b2</th></tr></thead>
+    <tbody>
+{_med_rows}    </tbody>
+  </table>
+  </div>
+</div>"""
+        else:
+            fits_table_html = f"""<div class="stats-section">
   <div class="stats-title">Relaxometry Fit Results</div>
   <table class="stats-table">
     <thead>
       <tr><th>Vial</th><th>{fit_unit_label}</th><th>S0</th><th>R\u00b2</th></tr>
     </thead>
     <tbody>
-{fit_rows_html}    </tbody>
+{_mean_rows}    </tbody>
   </table>
 </div>"""
     else:
@@ -724,17 +933,23 @@ def build_relaxometry_html(
         _ref_vials = ref_data.get("vials", [])
         _ref_vals = ref_data.get(fit_key, {})
         _ref_upper = {k.upper(): v for k, v in _ref_vals.items()}
-        _meas_map = {
-            r.get("Vial", "").upper(): r.get(fit_key)
-            for r in fit_results
-            if r.get(fit_key) is not None
-        }
+        def _build_meas_pts(results):
+            mmap = {
+                r.get("Vial", "").upper(): r.get(fit_key)
+                for r in (results or [])
+                if r.get(fit_key) is not None
+            }
+            return [
+                {"x": _j, "y": round(float(mmap[_v.upper()]), 1)}
+                for _j, _v in enumerate(_ref_vials)
+                if mmap.get(_v.upper()) is not None
+            ]
 
-        _meas_pts, _ref_pts = [], []
+        _meas_pts = _build_meas_pts(fit_results)
+        _meas_pts_median = _build_meas_pts(fit_results_median or fit_results)
+        _ref_pts = []
         for _j, _v in enumerate(_ref_vials):
             _mu = _v.upper()
-            if _meas_map.get(_mu) is not None:
-                _meas_pts.append({"x": _j, "y": round(float(_meas_map[_mu]), 1)})
             if _ref_upper.get(_mu) is not None:
                 _ref_pts.append({"x": _j, "y": float(_ref_upper[_mu])})
 
@@ -743,6 +958,7 @@ def build_relaxometry_html(
         _ref_color = "#C62828"    # red open circles — reference
         _meas_ds = {
             "label": f"Measured {_unit_label}",
+            "_refMeas": True,
             "data": _meas_pts,
             "borderColor": _meas_color,
             "backgroundColor": _meas_color,
@@ -768,6 +984,7 @@ def build_relaxometry_html(
         _vial_labels_json = json.dumps(_ref_vials)
         _meas_ds_json = json.dumps(_meas_ds)
         _ref_ds_json = json.dumps(_ref_ds)
+        _ref_meas_json = json.dumps({"mean": _meas_pts, "median": _meas_pts_median})
         _unit_label_json = json.dumps(_unit_label)
 
         ref_chart_html = f"""<div class="chart-card" style="margin-bottom:20px;">
@@ -777,17 +994,20 @@ def build_relaxometry_html(
 
         ref_chart_js = f"""
 const _REF_VIALS = {_vial_labels_json};
+const _REF_MEAS = {_ref_meas_json};
 (function() {{
   const opts = baseOpts("Vial", {_unit_label_json});
   opts.scales.x.type = "linear";
   opts.scales.x.ticks.stepSize = 1;
   opts.scales.x.ticks.callback = v => _REF_VIALS[v] ?? v;
   opts.plugins.legend.display = true;
+  opts.plugins.legend.onClick = null;
   opts.plugins.legend.labels = {{ color: "#888780", font: {{ size: 12 }} }};
-  new Chart(
+  const refChart = new Chart(
     document.getElementById("refChart").getContext("2d"),
     {{ type: "line", data: {{ datasets: [{_meas_ds_json}, {_ref_ds_json}] }}, options: opts }}
   );
+  _pkCharts.push(refChart);
 }})();"""
 
     # ------------------------------------------------------------------
@@ -829,12 +1049,13 @@ const _REF_VIALS = {_vial_labels_json};
 
 {viewer_html}
 
+{PK_CONTROLS_HTML_WITH_LEGEND}
+
 <div class="chart-grid">
 {chart_cards_html}
 </div>
 <p style="font-size:11px;color:var(--text2);margin:2px 0 18px;padding:0 4px;">
-  Error bars: &plusmn;1 SD of voxel intensities within vial ROI &nbsp;&middot;&nbsp;
-  Shaded band: 95&thinsp;% CI of fitted curve
+  Shaded band: 95&thinsp;% CI of fitted curve (always based on mean)
 </p>
 
 {ref_chart_html}
@@ -845,8 +1066,10 @@ const _REF_VIALS = {_vial_labels_json};
 
 <script>
 const SUBPLOTS = {datasets_json};
+const PK_DATA = {pk_data_json};
 {axis_consts_js}
 {ERROR_BAR_PLUGIN_JS}
+{PK_TOGGLE_JS}
 {opts_js}
 
 function makeChart(id, datasets) {{
@@ -862,10 +1085,12 @@ function makeChart(id, datasets) {{
     options: opts,
     plugins: [errorBarPlugin],
   }});
+  _pkCharts.push(c);
   return c;
 }}
 
 SUBPLOTS.forEach((datasets, i) => makeChart("chart" + i, datasets));
+pkUpdateAllCharts();
 {ref_chart_js}
 {viewer_js}
 </script>

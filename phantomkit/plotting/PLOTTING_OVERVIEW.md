@@ -41,6 +41,27 @@ These values are used as the x-axis in the T1/T2 mapping plots and for fitting t
 
 ## What each plot contains
 
+### Interactive controls (all HTML plots)
+
+All HTML plots share a unified control bar:
+
+| Control | Function |
+|---|---|
+| **Measure** — Mean / Median | Switches all scatter data points and error bars between the mean and median of each vial. For relaxometry plots, the T1/T2 curve fits and fit-results table are also recomputed independently for each measure. |
+| **Error bars** — ±SD / ±SE / ±2 SE / ±MAD / IQR / Min–Max / None | Selects the error bar style. All variants are pre-computed at page-load time and stored in `PK_DATA.errBounds`; switching is instant with no recomputation. |
+| **Legend** — Show / Hide | Toggles the Chart.js legend on all subplots simultaneously. Hidden by default to reduce clutter; internal CI-band datasets (prefixed `_`) are always excluded from the legend. |
+
+#### Error bar definitions
+
+| Variant | Definition |
+|---|---|
+| ±SD | Mean ± standard deviation |
+| ±SE | Mean ± standard error (SD / √n) |
+| ±2 SE | Mean ± 2× standard error (≈ 95% CI of the mean) |
+| ±MAD | Central value ± Mean Absolute Deviation. For the **Mean** measure: MAD = mean(\|x − mean(x)\|). For the **Median** measure: MAD = mean(\|x − median(x)\|). |
+| IQR | 25th–75th percentile bar (computed via `mrdump` + `numpy.percentile`). Previously computed via `mrthreshold -percentile` which was unreliable; now uses a direct voxel dump. |
+| Min–Max | Range from minimum to maximum voxel value. |
+
 ### Per-contrast scatter plots (`plot_vial_intensity`)
 
 These cover ADC, FA, and any other single-volume contrast (e.g. T1_in_DWI_space).
@@ -55,7 +76,7 @@ These cover ADC, FA, and any other single-volume contrast (e.g. T1_in_DWI_space)
 
 - **8-panel Chart.js grid** — one subplot per vial group — showing mean intensity vs TI (T1) or TE (T2), with fitted mono-exponential / inversion-recovery curves and 95% confidence intervals.
 - **Measured vs Reference chart** — a full-width scatter showing fitted T1 or T2 (ms) per vial (blue filled circles) alongside reference values from `t1t2_reference.json` (red open circles). The vial order matches descending relaxation time.
-- **Fit results table** — per-vial T1/T2, S0, R², sorted by descending relaxation time.
+- **Fit results table** — per-vial T1/T2, S0, R², sorted by descending relaxation time. A separate table is shown for the Mean and Median measures and toggled automatically by the Measure control.
 - **Embedded MRI viewer** showing the subject T1 anatomical (or first matching contrast as fallback), with only the vials listed in `t1t2_reference.json` shown as toggleable overlays.
 
 ---
@@ -85,6 +106,27 @@ All plots contain a self-contained MRI viewer rendered by [NiiVue](https://githu
 - Toggle chip buttons above the viewer show/hide individual vials via `setOpacity`.
 - For ADC plots, only the ADC calibration vials (E–L) are included.
 - For T1/T2 mapping, only vials listed in `t1t2_reference.json` are included.
+
+---
+
+## Metrics xlsx structure
+
+Each per-contrast xlsx written by the pipeline contains the following sheets:
+
+| Sheet | Contents |
+|---|---|
+| `mean` | Per-vial voxel mean (one column per volume) |
+| `median` | Per-vial voxel median |
+| `std` | Per-vial standard deviation |
+| `min` | Per-vial minimum voxel value |
+| `max` | Per-vial maximum voxel value |
+| `count` | Number of voxels in each vial ROI |
+| `p25` | 25th percentile (computed via `mrdump` + `numpy.percentile`) |
+| `p75` | 75th percentile (same method) |
+| `mean_mad` | Mean Absolute Deviation from mean: mean(\|x − mean(x)\|) |
+| `median_mad` | Mean Absolute Deviation from median: mean(\|x − median(x)\|) |
+
+Plotting functions degrade gracefully if a sheet is absent (e.g. when reading older xlsx files without MAD sheets) by substituting a fallback value derived from the mean and std columns.
 
 ---
 

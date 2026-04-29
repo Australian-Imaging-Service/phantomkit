@@ -18,6 +18,39 @@ from pydra.tasks.mrtrix3.v3_1 import MrConvert, MrGrid, MrInfo, MrStats
 
 from phantomkit.registration import ParseMrStatsStdout
 
+
+@python.define
+def ComputePercentile(
+    vol_file: NiftiGz, mask_file: NiftiGz, percentile: int, tmp_dir: Path
+) -> float:
+    """Compute a per-voxel percentile within a mask using mrthreshold + mrdump."""
+    import hashlib
+    import subprocess
+
+    h = hashlib.md5(f"{vol_file}{mask_file}{percentile}".encode()).hexdigest()[:8]
+    from pathlib import Path as _P
+    mask1 = str(_P(tmp_dir) / f"pct{percentile}_{h}_m1.mif")
+    mask2 = str(_P(tmp_dir) / f"pct{percentile}_{h}_m2.mif")
+    try:
+        subprocess.run(
+            ["mrthreshold", str(vol_file), "-mask", str(mask_file),
+             "-percentile", str(percentile), mask1, "-force", "-quiet"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["mrthreshold", str(vol_file), "-mask", mask1,
+             "-top", "1", mask2, "-force", "-quiet"],
+            check=True, capture_output=True,
+        )
+        r = subprocess.run(
+            ["mrdump", str(vol_file), "-mask", mask2],
+            capture_output=True, text=True, check=True,
+        )
+        vals = [float(x) for x in r.stdout.strip().split() if x]
+        return vals[0] if vals else float("nan")
+    except Exception:
+        return float("nan")
+
 logger = logging.getLogger(__name__)
 
 
@@ -185,11 +218,8 @@ def ExtractMetricsFromContrasts(
             "Processing %s (%d volume%s)", clean_name, nvols, "s" if nvols > 1 else ""
         )
         metrics_data: dict[str, dict[str, list[float]]] = {
-            "mean": {},
-            "median": {},
-            "std": {},
-            "min": {},
-            "max": {},
+            "mean": {}, "median": {}, "std": {}, "min": {}, "max": {},
+            "count": {}, "p25": {}, "p75": {},
         }
 
         for vial_mask in vial_masks:
@@ -239,7 +269,7 @@ def ExtractMetricsFromContrasts(
                     MrStats(
                         image_=vol_file,
                         mask=regridded_mask,
-                        output=["mean", "median", "std", "min", "max"],
+                        output=["mean", "median", "std", "min", "max", "count"],
                         quiet=True,
                     ),
                     name=f"stats_{tag}",
@@ -254,12 +284,32 @@ def ExtractMetricsFromContrasts(
                 metrics_data["std"][vial_name].append(values[2])
                 metrics_data["min"][vial_name].append(values[3])
                 metrics_data["max"][vial_name].append(values[4])
+                metrics_data["count"][vial_name].append(values[5])
+
+                p25_task = workflow.add(
+                    ComputePercentile(
+                        vol_file=vol_file, mask_file=regridded_mask,
+                        percentile=25, tmp_dir=tmp_vol_dir,
+                    ),
+                    name=f"p25_{tag}",
+                )
+                p75_task = workflow.add(
+                    ComputePercentile(
+                        vol_file=vol_file, mask_file=regridded_mask,
+                        percentile=75, tmp_dir=tmp_vol_dir,
+                    ),
+                    name=f"p75_{tag}",
+                )
+                metrics_data["p25"][vial_name].append(p25_task.out)
+                metrics_data["p75"][vial_name].append(p75_task.out)
 
         xlsx_dir = metrics_dir / "xlsx"
         xlsx_dir.mkdir(parents=True, exist_ok=True)
         xlsx_file = xlsx_dir / f"{clean_name}.xlsx"
+        sheet_order = ["mean", "median", "std", "min", "max", "count", "p25", "p75"]
         with pd.ExcelWriter(xlsx_file, engine="openpyxl") as writer:
-            for metric_name, vial_data in metrics_data.items():
+            for metric_name in sheet_order:
+                vial_data = metrics_data[metric_name]
                 rows = [
                     {"vial": vn, **{f"vol{i}": v for i, v in enumerate(vals)}}
                     for vn, vals in vial_data.items()

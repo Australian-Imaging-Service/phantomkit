@@ -58,6 +58,49 @@ def find_csv_file(metric_dir, contrast_name, suffix):
     )
 
 
+def _compute_fits_ir(vial_groups, vial_to_idx, data_matrix, contrast_numbers):
+    """Fit T1 inversion recovery for all vials; return (subplot_fits, fit_results)."""
+    subplot_fits = []
+    fit_results = []
+    for group in vial_groups:
+        for vial in group:
+            if vial not in vial_to_idx:
+                continue
+            i = vial_to_idx[vial]
+            try:
+                popt, pcov = curve_fit(
+                    inv_rec, contrast_numbers, data_matrix[i, :],
+                    p0=(data_matrix[i, -1], 1000), maxfev=5000,
+                )
+                S0_fit, T1_fit = popt
+                r2 = calc_r2(data_matrix[i, :], inv_rec(contrast_numbers, *popt))
+                try:
+                    T1_se = float(np.sqrt(pcov[1, 1])) if np.isfinite(pcov[1, 1]) else None
+                except Exception:
+                    T1_se = None
+                fit_results.append({"Vial": vial, "S0": S0_fit, "T1_ms": T1_fit, "T1_se_ms": T1_se, "R2": r2})
+                x_fit = np.linspace(0, max(contrast_numbers), 200)
+                y_fit = inv_rec(x_fit, *popt)
+                ci_lower = ci_upper = None
+                try:
+                    samples = np.random.multivariate_normal(popt, pcov, 1000)
+                    preds = np.array([inv_rec(x_fit, *s) for s in samples])
+                    ci_lower = np.percentile(preds, 2.5, axis=0)
+                    ci_upper = np.percentile(preds, 97.5, axis=0)
+                except (np.linalg.LinAlgError, ValueError) as e:
+                    logger.warning("Could not calculate CI for vial %s: %s", vial, e)
+                subplot_fits.append({
+                    "vial": vial,
+                    "x_fit": x_fit.tolist(),
+                    "y_fit": y_fit.tolist(),
+                    "ci_lower": ci_lower.tolist() if ci_lower is not None else None,
+                    "ci_upper": ci_upper.tolist() if ci_upper is not None else None,
+                })
+            except RuntimeError:
+                logger.warning("Could not fit T₁ for vial %s", vial)
+    return subplot_fits, fit_results
+
+
 def extract_numeric(label):
     """
     Extract the last numeric value from a string label.
@@ -172,6 +215,14 @@ def plot_vial_ir_means_std(
     contrast_numbers = []  # Inversion times extracted from filenames
     mean_matrix = []  # Mean intensity values for each vial at each TI
     std_matrix = []  # Standard deviation values
+    median_matrix = []
+    count_matrix = []
+    p25_matrix = []
+    p75_matrix = []
+    min_matrix = []
+    max_matrix = []
+    mean_mad_matrix = []
+    median_mad_matrix = []
 
     # Loop through each contrast file (different inversion times)
     for nifti_path in contrast_files:
@@ -192,9 +243,39 @@ def plot_vial_ir_means_std(
         std_matrix.append(std_df.iloc[:, 1].to_numpy())
         contrast_numbers.append(extract_numeric(base_name))
 
+        # Optional sheets — graceful degradation for older xlsx files
+        _mean_col = mean_df.iloc[:, 1].to_numpy()
+        for _attr, _sheet in [
+            (median_matrix, "median"),
+            (count_matrix, "count"),
+            (p25_matrix, "p25"),
+            (p75_matrix, "p75"),
+            (min_matrix, "min"),
+            (max_matrix, "max"),
+            (mean_mad_matrix, "mean_mad"),
+            (median_mad_matrix, "median_mad"),
+        ]:
+            try:
+                _df = pd.read_excel(xlsx_path, sheet_name=_sheet)
+                vals = _df.iloc[:, 1].to_numpy().astype(float)
+                nan_mask = np.isnan(vals)
+                if nan_mask.any():
+                    vals[nan_mask] = _mean_col[nan_mask]
+                _attr.append(vals)
+            except Exception:
+                _attr.append(_mean_col.copy())
+
     # Convert lists to numpy arrays for easier manipulation
     mean_matrix = np.array(mean_matrix)
     std_matrix = np.array(std_matrix)
+    median_matrix = np.array(median_matrix)
+    count_matrix = np.array(count_matrix)
+    p25_matrix = np.array(p25_matrix)
+    p75_matrix = np.array(p75_matrix)
+    min_matrix = np.array(min_matrix)
+    max_matrix = np.array(max_matrix)
+    mean_mad_matrix = np.array(mean_mad_matrix)
+    median_mad_matrix = np.array(median_mad_matrix)
 
     # ========================================================================
     # DATA ORGANIZATION: Sort by inversion time and transpose
@@ -202,8 +283,16 @@ def plot_vial_ir_means_std(
     # Sort all data by inversion time (ascending order)
     sort_idx = np.argsort(contrast_numbers)
     contrast_numbers = np.array(contrast_numbers)[sort_idx]
-    mean_matrix = mean_matrix[sort_idx].T  # Transpose so rows=vials, cols=TI
-    std_matrix = std_matrix[sort_idx].T
+    mean_matrix       = mean_matrix[sort_idx].T    # rows=vials, cols=TI
+    std_matrix        = std_matrix[sort_idx].T
+    median_matrix     = median_matrix[sort_idx].T
+    count_matrix      = count_matrix[sort_idx].T
+    p25_matrix        = p25_matrix[sort_idx].T
+    p75_matrix        = p75_matrix[sort_idx].T
+    min_matrix        = min_matrix[sort_idx].T
+    max_matrix        = max_matrix[sort_idx].T
+    mean_mad_matrix   = mean_mad_matrix[sort_idx].T
+    median_mad_matrix = median_mad_matrix[sort_idx].T
 
     # Create mapping from vial label to row index for quick lookup
     vial_to_idx = {label: i for i, label in enumerate(vial_labels)}
@@ -211,110 +300,19 @@ def plot_vial_ir_means_std(
     # Define y-axis limits for all subplots (consistent across all plots)
     yticks = [-100, 1000, 2000, 3000, 4000]
 
-    # Storage for fitted parameters (will be saved to CSV)
-    fit_results = []
-
-    # Storage for pre-computed curves (used by HTML path)
-    subplot_fits = []  # list of dicts per vial: {vial, color, x_fit, y_fit, ci_lower, ci_upper}
-
     # ========================================================================
-    # CURVE FITTING LOOP (shared by both PNG and HTML paths)
+    # CURVE FITTING (mean and median \u2014 shared by both PNG and HTML paths)
     # ========================================================================
     cmap = plt.get_cmap("tab10")
-
-    for g_idx, group in enumerate(vial_groups):
-        if len(group) == 1:
-            vial = group[0]
-            if vial not in vial_to_idx:
-                continue
-            i = vial_to_idx[vial]
-
-            try:
-                popt, pcov = curve_fit(
-                    inv_rec,
-                    contrast_numbers,
-                    mean_matrix[i, :],
-                    p0=(mean_matrix[i, -1], 1000),
-                    maxfev=5000,
-                )
-                S0_fit, T1_fit = popt
-                fit_signal = inv_rec(contrast_numbers, *popt)
-                r2 = calc_r2(mean_matrix[i, :], fit_signal)
-                try:
-                    T1_se: float | None = float(np.sqrt(pcov[1, 1])) if np.isfinite(pcov[1, 1]) else None
-                except Exception:
-                    T1_se = None
-                fit_results.append({"Vial": vial, "S0": S0_fit, "T1_ms": T1_fit, "T1_se_ms": T1_se, "R2": r2})
-
-                x_fit = np.linspace(0, max(contrast_numbers), 200)
-                y_fit = inv_rec(x_fit, *popt)
-                ci_lower = ci_upper = None
-                try:
-                    param_samples = np.random.multivariate_normal(popt, pcov, 1000)
-                    predictions = np.array([inv_rec(x_fit, *s) for s in param_samples])
-                    ci_lower = np.percentile(predictions, 2.5, axis=0)
-                    ci_upper = np.percentile(predictions, 97.5, axis=0)
-                except (np.linalg.LinAlgError, ValueError) as e:
-                    logger.warning("Could not calculate 95%% CI for vial %s: %s", vial, e)
-
-                subplot_fits.append({
-                    "vial": vial,
-                    "x_fit": x_fit.tolist(),
-                    "y_fit": y_fit.tolist(),
-                    "ci_lower": ci_lower.tolist() if ci_lower is not None else None,
-                    "ci_upper": ci_upper.tolist() if ci_upper is not None else None,
-                })
-            except RuntimeError:
-                logger.warning("Could not fit T\u2081 for vial %s", vial)
-
-        else:
-            for j, vial in enumerate(group):
-                if vial not in vial_to_idx:
-                    continue
-                i = vial_to_idx[vial]
-
-                try:
-                    popt, pcov = curve_fit(
-                        inv_rec,
-                        contrast_numbers,
-                        mean_matrix[i, :],
-                        p0=(mean_matrix[i, -1], 1000),
-                        maxfev=5000,
-                    )
-                    S0_fit, T1_fit = popt
-                    fit_signal = inv_rec(contrast_numbers, *popt)
-                    r2 = calc_r2(mean_matrix[i, :], fit_signal)
-                    try:
-                        T1_se = float(np.sqrt(pcov[1, 1])) if np.isfinite(pcov[1, 1]) else None
-                    except Exception:
-                        T1_se = None
-                    fit_results.append({"Vial": vial, "S0": S0_fit, "T1_ms": T1_fit, "T1_se_ms": T1_se, "R2": r2})
-
-                    x_fit = np.linspace(0, max(contrast_numbers), 200)
-                    y_fit = inv_rec(x_fit, *popt)
-                    ci_lower = ci_upper = None
-                    try:
-                        param_samples = np.random.multivariate_normal(popt, pcov, 1000)
-                        predictions = np.array([inv_rec(x_fit, *s) for s in param_samples])
-                        ci_lower = np.percentile(predictions, 2.5, axis=0)
-                        ci_upper = np.percentile(predictions, 97.5, axis=0)
-                    except (np.linalg.LinAlgError, ValueError) as e:
-                        logger.warning(
-                            "Could not calculate 95%% CI for vial %s: %s", vial, e
-                        )
-
-                    subplot_fits.append({
-                        "vial": vial,
-                        "x_fit": x_fit.tolist(),
-                        "y_fit": y_fit.tolist(),
-                        "ci_lower": ci_lower.tolist() if ci_lower is not None else None,
-                        "ci_upper": ci_upper.tolist() if ci_upper is not None else None,
-                    })
-                except RuntimeError:
-                    logger.warning("Could not fit T\u2081 for vial %s", vial)
+    subplot_fits, fit_results = _compute_fits_ir(
+        vial_groups, vial_to_idx, mean_matrix, contrast_numbers
+    )
+    subplot_fits_median, fit_results_median = _compute_fits_ir(
+        vial_groups, vial_to_idx, median_matrix, contrast_numbers
+    )
 
     # ========================================================================
-    # SAVE: Fitted T1 CSV (always, regardless of output format)
+    # SAVE: Fitted T1 CSV (mean-based; always, regardless of output format)
     # ========================================================================
     csv_stem = re.sub(r"\.(png|html)$", "", output_file, flags=re.IGNORECASE)
     csv_output = fits_output if fits_output else csv_stem + "_T1_fits.csv"
@@ -349,8 +347,18 @@ def plot_vial_ir_means_std(
             contrast_numbers=contrast_numbers,
             mean_matrix=mean_matrix,
             std_matrix=std_matrix,
+            median_matrix=median_matrix,
+            count_matrix=count_matrix,
+            p25_matrix=p25_matrix,
+            p75_matrix=p75_matrix,
+            min_matrix=min_matrix,
+            max_matrix=max_matrix,
+            mean_mad_matrix=mean_mad_matrix,
+            median_mad_matrix=median_mad_matrix,
             vial_labels=vial_labels,
             subplot_fits=subplot_fits,
+            subplot_fits_median=subplot_fits_median,
+            fit_results_median=fit_results_median,
             embedded_data=embedded_data,
             nifti_image=nifti_image,
             vial_niftis=vial_niftis,
