@@ -31,26 +31,24 @@ matplotlib.use("Agg")  # non-interactive backend; required when plotting runs
 logger = logging.getLogger(__name__)
 
 
-def find_csv_file(metric_dir, contrast_name, suffix):
+def find_xlsx_file(metric_dir, contrast_name):
     """
-    Find a CSV file in a directory that matches the contrast name and suffix.
-
-    Uses an exact token match: the contrast_name must appear in the filename
-    immediately followed by the suffix (no extra characters between them).
-    This prevents ambiguous substring hits such as 'se_ir_100' matching
-    'se_ir_1000_mean_matrix.csv' or 'se_ir_50' matching 'se_ir_500_mean_matrix.csv'.
-
-    Args:
-        metric_dir: Directory containing CSV files
-        contrast_name: Base name of the contrast to search for
-        suffix: File suffix to match (e.g., '_mean_matrix.csv')
-
-    Returns:
-        Full path to the matched CSV file
+    Find a per-contrast xlsx file in metric_dir.
 
     Raises:
         FileNotFoundError: If no matching file is found
     """
+    target = contrast_name + ".xlsx"
+    for f in os.listdir(metric_dir):
+        if f == target:
+            return os.path.join(metric_dir, f)
+    raise FileNotFoundError(
+        f"No xlsx file found for contrast '{contrast_name}' in {metric_dir}"
+    )
+
+
+def find_csv_file(metric_dir, contrast_name, suffix):
+    """Kept for backwards compatibility — prefer find_xlsx_file."""
     exact_tail = contrast_name + suffix
     for f in os.listdir(metric_dir):
         if f.endswith(exact_tail):
@@ -180,13 +178,10 @@ def plot_vial_ir_means_std(
         # Extract base filename without extension
         base_name = os.path.basename(nifti_path).replace(".nii.gz", "")
 
-        # Find corresponding CSV files with mean and std data
-        mean_csv = find_csv_file(metric_dir, base_name, "_mean_matrix.csv")
-        std_csv = find_csv_file(metric_dir, base_name, "_std_matrix.csv")
-
-        # Read CSV files (auto-detect delimiter: comma, tab, etc.)
-        mean_df = pd.read_csv(mean_csv, sep=None, engine="python")
-        std_df = pd.read_csv(std_csv, sep=None, engine="python")
+        # Find the per-contrast xlsx and read mean/std sheets
+        xlsx_path = find_xlsx_file(metric_dir, base_name)
+        mean_df = pd.read_excel(xlsx_path, sheet_name="mean")
+        std_df = pd.read_excel(xlsx_path, sheet_name="std")
 
         # Get vial labels from first file (column 0)
         if vial_labels is None:

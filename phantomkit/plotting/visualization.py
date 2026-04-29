@@ -225,7 +225,7 @@ def GeneratePlots(
     )
 
     metrics_path = _Path(metrics_dir)
-    csv_dir = metrics_path / "csv"
+    xlsx_dir = metrics_path / "xlsx"
     plots_dir = metrics_path / "plots"
     fits_dir = metrics_path / "fits"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -268,9 +268,9 @@ def GeneratePlots(
     for contrast_file in contrast_files:
         contrast_path = _Path(contrast_file)
         contrast_name = contrast_path.stem
-        mean_csv = str(csv_dir / f"{contrast_name}_mean_matrix.csv")
-        std_csv = str(csv_dir / f"{contrast_name}_std_matrix.csv")
-        if not _Path(mean_csv).exists():
+        clean_contrast_name = contrast_name.replace(".nii", "").replace(".gz", "")
+        xlsx_file = str(xlsx_dir / f"{clean_contrast_name}.xlsx")
+        if not _Path(xlsx_file).exists():
             continue
 
         # Output filename: .html or .png depending on format
@@ -287,9 +287,8 @@ def GeneratePlots(
             }
             workflow.add(
                 python.define(plot_vial_intensity)(
-                    csv_file=mean_csv,
+                    csv_file=xlsx_file,
                     plot_type="scatter",
-                    std_csv=std_csv,
                     roi_image=None,
                     output=output_plot,
                     phantom=None,
@@ -332,9 +331,8 @@ def GeneratePlots(
 
             workflow.add(
                 python.define(plot_vial_intensity)(
-                    csv_file=mean_csv,
+                    csv_file=xlsx_file,
                     plot_type="scatter",
-                    std_csv=std_csv,
                     roi_image=roi_image,
                     output=output_plot,
                     phantom=None,
@@ -383,7 +381,7 @@ def GeneratePlots(
             workflow.add(
                 python.define(plot_fn)(
                     contrast_files=matching,
-                    metric_dir=str(csv_dir),
+                    metric_dir=str(xlsx_dir),
                     output_file=output_plot,
                     roi_image=None,
                     output_format="html",
@@ -425,7 +423,7 @@ def GeneratePlots(
             workflow.add(
                 python.define(plot_fn)(
                     contrast_files=matching,
-                    metric_dir=str(csv_dir),
+                    metric_dir=str(xlsx_dir),
                     output_file=output_plot,
                     roi_image=roi_image_arg,
                     output_format="png",

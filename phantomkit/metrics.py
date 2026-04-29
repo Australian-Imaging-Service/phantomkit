@@ -255,16 +255,17 @@ def ExtractMetricsFromContrasts(
                 metrics_data["min"][vial_name].append(values[3])
                 metrics_data["max"][vial_name].append(values[4])
 
-        csv_dir = metrics_dir / "csv"
-        csv_dir.mkdir(parents=True, exist_ok=True)
-        for metric_name, vial_data in metrics_data.items():
-            csv_file = csv_dir / f"{contrast_name}_{metric_name}_matrix.csv"
-            rows = [
-                {"vial": vn, **{f"{clean_name}_vol{i}": v for i, v in enumerate(vals)}}
-                for vn, vals in vial_data.items()
-            ]
-            pd.DataFrame(rows).to_csv(csv_file, index=False)
-            logger.info("Saved: %s", csv_file.name)
+        xlsx_dir = metrics_dir / "xlsx"
+        xlsx_dir.mkdir(parents=True, exist_ok=True)
+        xlsx_file = xlsx_dir / f"{clean_name}.xlsx"
+        with pd.ExcelWriter(xlsx_file, engine="openpyxl") as writer:
+            for metric_name, vial_data in metrics_data.items():
+                rows = [
+                    {"vial": vn, **{f"vol{i}": v for i, v in enumerate(vals)}}
+                    for vn, vals in vial_data.items()
+                ]
+                pd.DataFrame(rows).to_excel(writer, sheet_name=metric_name, index=False)
+        logger.info("Saved: %s", xlsx_file.name)
 
     return metrics_dir
 

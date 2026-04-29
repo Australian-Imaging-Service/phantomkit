@@ -432,22 +432,17 @@ def _task_extract_metrics(
                 metrics_data["min"][vial_name].append(float(values[3]))
                 metrics_data["max"][vial_name].append(float(values[4]))
 
-        csv_dir = metrics_dir / "csv"
-        csv_dir.mkdir(parents=True, exist_ok=True)
-        for metric_name, vial_data in metrics_data.items():
-            csv_file = csv_dir / f"{contrast_name}_{metric_name}_matrix.csv"
-            rows = [
-                {
-                    "vial": vn,
-                    **{
-                        f"{clean_contrast_name}_vol{i}": v
-                        for i, v in enumerate(vals)
-                    },
-                }
-                for vn, vals in vial_data.items()
-            ]
-            pd.DataFrame(rows).to_csv(csv_file, index=False)
-            print(f"    Saved: {csv_file.name}")
+        xlsx_dir = metrics_dir / "xlsx"
+        xlsx_dir.mkdir(parents=True, exist_ok=True)
+        xlsx_file = xlsx_dir / f"{clean_contrast_name}.xlsx"
+        with pd.ExcelWriter(xlsx_file, engine="openpyxl") as writer:
+            for metric_name, vial_data in metrics_data.items():
+                rows = [
+                    {"vial": vn, **{f"vol{i}": v for i, v in enumerate(vals)}}
+                    for vn, vals in vial_data.items()
+                ]
+                pd.DataFrame(rows).to_excel(writer, sheet_name=metric_name, index=False)
+        print(f"    Saved: {xlsx_file.name}")
 
     return output_metrics_dir  # sentinel for downstream ordering
 
@@ -476,7 +471,7 @@ def _task_generate_plots(
     from phantomkit.plotting.maps_te import plot_vial_te_means_std
 
     metrics_path = Path(metrics_dir)
-    csv_dir = metrics_path / "csv"
+    xlsx_dir = metrics_path / "xlsx"
     plots_dir = metrics_path / "plots"
     fits_dir = metrics_path / "fits"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -524,11 +519,10 @@ def _task_generate_plots(
                 contrast_name = contrast_name[: -len(_ext)]
                 break
 
-        mean_csv = csv_dir / f"{contrast_name}_mean_matrix.csv"
-        std_csv = csv_dir / f"{contrast_name}_std_matrix.csv"
+        xlsx_file = xlsx_dir / f"{contrast_name}.xlsx"
 
-        if not mean_csv.exists():
-            print(f"  ⚠ Mean CSV not found, skipping plot for {contrast_name}")
+        if not xlsx_file.exists():
+            print(f"  ⚠ xlsx not found, skipping plot for {contrast_name}")
             continue
 
         # IR/TE individual contrasts always use PNG — the T1/T2 mapping HTML
@@ -539,9 +533,8 @@ def _task_generate_plots(
         if output_format == "html" and not is_ir_or_te:
             try:
                 plot_vial_intensity(
-                    csv_file=str(mean_csv),
+                    csv_file=str(xlsx_file),
                     plot_type="scatter",
-                    std_csv=str(std_csv) if std_csv.exists() else None,
                     roi_image=None,
                     output=output_plot,
                     phantom=phantom_name,
@@ -582,9 +575,8 @@ def _task_generate_plots(
 
             try:
                 plot_vial_intensity(
-                    csv_file=str(mean_csv),
+                    csv_file=str(xlsx_file),
                     plot_type="scatter",
-                    std_csv=str(std_csv) if std_csv.exists() else None,
                     roi_image=roi_image,
                     output=output_plot,
                     phantom=phantom_name,
@@ -629,7 +621,7 @@ def _task_generate_plots(
             try:
                 plot_fn(
                     contrast_files=[str(f) for f in matching],
-                    metric_dir=str(csv_dir),
+                    metric_dir=str(xlsx_dir),
                     output_file=output_plot,
                     roi_image=None,
                     output_format="html",
@@ -662,7 +654,7 @@ def _task_generate_plots(
             try:
                 plot_fn(
                     contrast_files=[str(f) for f in matching],
-                    metric_dir=str(csv_dir),
+                    metric_dir=str(xlsx_dir),
                     output_file=output_plot,
                     roi_image=roi_image_arg,
                     output_format="png",
@@ -1052,8 +1044,8 @@ class PhantomProcessor:
         Writes an interactive HTML report to ``metrics_dir/plots/``.
         Silently skips if ADC metrics, calibration LUT, or phantom config are absent.
         """
-        adc_csv = metrics_dir / "csv" / "ADC_mean_matrix.csv"
-        if not adc_csv.exists():
+        adc_xlsx = metrics_dir / "xlsx" / "ADC.xlsx"
+        if not adc_xlsx.exists():
             return
 
         calib_lut = self.template_dir.parent / "DIFFUSION-O-3574_Calibration_GSP_PVP_20220331.xlsx"
@@ -1067,7 +1059,6 @@ class PhantomProcessor:
         try:
             from phantomkit.plotting.calibration_plotter import (
                 parse_calibration_xlsx,
-                parse_vials_csv,
                 load_phantom_config,
                 build_vial_map,
                 estimate_temperature,
@@ -1075,7 +1066,11 @@ class PhantomProcessor:
             )
 
             formulations = parse_calibration_xlsx(str(calib_lut))
-            vials_adc = parse_vials_csv(str(adc_csv))
+            _adc_df = pd.read_excel(adc_xlsx, sheet_name="mean")
+            vials_adc = {
+                str(row.iloc[0]).strip(): float(row.iloc[1])
+                for _, row in _adc_df.iterrows()
+            }
             phantom_cfg = load_phantom_config(str(phantom_cfg_path))
             vial_map = build_vial_map(phantom_cfg, self.phantom_name)
 

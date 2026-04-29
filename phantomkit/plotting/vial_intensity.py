@@ -479,21 +479,27 @@ def plot_vial_intensity(
                 "Error: --template_dir is required when the csv_file name contains 'ADC'."
             )
 
-    # ---- Load mean CSV -----------------------------------------------------
-    sep = detect_separator(csv_file)
-    mean_df = pd.read_csv(csv_file, sep=sep)
+    # ---- Load mean data -----------------------------------------------------
+    if Path(csv_file).suffix.lower() == ".xlsx":
+        mean_df = pd.read_excel(csv_file, sheet_name="mean")
+    else:
+        sep = detect_separator(csv_file)
+        mean_df = pd.read_csv(csv_file, sep=sep)
     if mean_df.shape[1] < 2:
         raise ValueError(
-            "mean CSV must have at least two columns (vial + at least one volume)."
+            "mean data must have at least two columns (vial + at least one volume)."
         )
 
     vials = mean_df.iloc[:, 0].astype(str).str.replace(r"\.mif$", "", regex=True)
     mean_values = mean_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
     n_vols = mean_values.shape[1]
 
-    # ---- Load std CSV (optional) -------------------------------------------
+    # ---- Load std data (from xlsx sheet or separate csv) -------------------
     std_values = None
-    if std_csv:
+    if Path(csv_file).suffix.lower() == ".xlsx":
+        std_df = pd.read_excel(csv_file, sheet_name="std")
+        std_values = std_df.iloc[:, 1:].to_numpy()  # shape (n_vials, n_vols)
+    elif std_csv:
         sep_std = detect_separator(std_csv)
         std_df = pd.read_csv(std_csv, sep=sep_std)
         if std_df.shape[1] < 2:
