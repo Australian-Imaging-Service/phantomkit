@@ -299,7 +299,7 @@ def _compute_voxel_stats(
         result["p25"] = float(_np.percentile(vals, 25))
         result["p75"] = float(_np.percentile(vals, 75))
         result["mean_mad"] = float(_np.mean(_np.abs(vals - vals.mean())))
-        result["median_mad"] = float(_np.mean(_np.abs(vals - _np.median(vals))))
+        result["median_mad"] = float(_np.median(_np.abs(vals - _np.median(vals))))
     except Exception:
         pass
     return result
