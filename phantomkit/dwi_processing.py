@@ -50,8 +50,9 @@ def sanitise_name(name: str) -> str:
 
 
 def strip_series_number(name: str) -> str:
-    """Strip leading series number, e.g. '87-ep2d_diff_...' -> 'ep2d_diff_...'"""
-    return re.sub(r"^\d+-", "", name)
+    """Strip leading series number and SEQ prefix, e.g. '87-SEQ5_ep2d_diff_...' -> 'ep2d_diff_...'"""
+    name = re.sub(r"^\d+-", "", name)
+    return re.sub(r"^SEQ\d+_", "", name, flags=re.IGNORECASE)
 
 
 def get_series_number(name: str) -> int:
