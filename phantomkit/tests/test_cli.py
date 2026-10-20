@@ -96,12 +96,12 @@ def test_run_vial_signal_single(runner, tmp_path) -> None:
                 "--output-base-dir",
                 str(tmp_path / "output"),
                 "--worker",
-                "serial",
+                "debug",
             ],
         )
 
     assert result.exit_code == 0, result.output
-    mock_sub.assert_called_once_with(worker="serial")
+    mock_sub.assert_called_once_with(worker="debug")
     mock_submitter.assert_called_once()  # sub(wf)
 
 
@@ -134,14 +134,14 @@ def test_run_vial_signal_batch_from_dir(runner, tmp_path) -> None:
                 "--output-base-dir",
                 str(tmp_path / "output"),
                 "--worker",
-                "serial",
+                "debug",
                 "--pattern",
                 "*.nii.gz",
             ],
         )
 
     assert result.exit_code == 0, result.output
-    mock_sub.assert_called_once_with(worker="serial")
+    mock_sub.assert_called_once_with(worker="debug")
     mock_submitter.assert_called_once()  # sub(wf)
 
 
