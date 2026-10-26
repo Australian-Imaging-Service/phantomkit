@@ -1702,7 +1702,13 @@ class PhantomProcessor:
             cpu_threads=self.n_threads,
             scan_date=self.scan_date,
         )
-        cache_dir = output_dir / ".pydra_cache"
+        # cache_dir must NOT be nested inside output_dir: PhantomSessionWf
+        # returns Directory(output_dir_str) as its real out_dir output, and
+        # pydra copies that Directory result into a path under cache_root
+        # when caching it. If cache_root is a subdirectory of output_dir,
+        # that copy's destination ends up nested inside its own source,
+        # raising "Cannot copy directory into itself".
+        cache_dir = output_dir.parent / f".pydra_cache_{session_name}"
         if cache_dir.exists():
             shutil.rmtree(cache_dir)
         sub = Submitter(worker="cf", cache_root=str(cache_dir))
