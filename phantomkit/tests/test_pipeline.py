@@ -141,6 +141,11 @@ def test_stage_input_returns_unchanged_when_already_classifiable(
     (input_dir / "SEQ-A_NIF_SAG_MPRAGE").mkdir(parents=True)
     output_dir.mkdir()
 
+    # No real DICOM data present (the mrinfo-based scan correctly finds
+    # nothing here), and the dcm2niix fallback should not run either, since
+    # the subdirectory is already classifiable by name.
+    monkeypatch.setattr("phantomkit.pipeline.stage_dicom_tree", lambda *a, **k: None)
+
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("dcm2niix fallback should not run when already classifiable")
 
@@ -161,6 +166,10 @@ def test_stage_input_falls_back_to_dcm2niix_for_foreign_dicom_dump(
     output_dir.mkdir()
     # Foreign dump: some file with no recognizable series-name subdirectory.
     (input_dir / "IM0001").write_bytes(b"fake dicom bytes")
+
+    # Not real DICOM data, so the mrinfo-based scan correctly finds nothing
+    # — falls through to the dcm2niix-based auto-split path under test here.
+    monkeypatch.setattr("phantomkit.pipeline.stage_dicom_tree", lambda *a, **k: None)
 
     def _fake_dcm2niix(cmd, check, capture_output):
         assert cmd[0] == "dcm2niix"
@@ -205,6 +214,8 @@ def test_stage_input_handles_dcm2niix_finding_nothing(
     input_dir.mkdir()
     output_dir.mkdir()
     (input_dir / "not_a_dicom.txt").write_text("hello")
+
+    monkeypatch.setattr("phantomkit.pipeline.stage_dicom_tree", lambda *a, **k: None)
 
     def _fake_dcm2niix_no_output(cmd, check, capture_output):
         return subprocess.CompletedProcess(cmd, 0)  # produces no NIfTIs

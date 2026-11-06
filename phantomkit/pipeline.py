@@ -65,6 +65,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from phantomkit.dicom_scan import stage_dicom_tree
+
 
 # ---------------------------------------------------------------------------
 # Path resolution
@@ -251,28 +253,48 @@ def _stage_input(input_dir: Path, output_dir: Path) -> Path:
 
     1. Stage flat NIfTI/MIF files via _wrap_flat_inputs (existing behavior,
        runs regardless of --dry-run — it's detection/staging, not
-       processing, same as this function's own fallback below).
-    2. If nothing is classifiable afterward — e.g. a "foreign" DICOM dump
-       with no per-series subdirectories at all — fall back to running
-       dcm2niix across the WHOLE original input_dir tree (dcm2niix recurses
-       into subdirectories on its own), producing a flat pile of
-       SeriesDescription-named NIfTIs, then relabel any AP/PA naming
-       collisions and stage the result via _wrap_flat_inputs too.
-    3. If the fallback also fails or finds nothing, return the original
+       processing, same as this function's own fallbacks below).
+    2. If input_dir contains any raw DICOM data anywhere (mrinfo-detected,
+       independent of subdirectory layout), convert it via
+       phantomkit.dicom_scan.stage_dicom_tree — mrinfo groups series by
+       their actual DICOM series UID, so this is run unconditionally
+       whenever DICOM data is present, not just when per-subdirectory
+       folder-name classification fails. A folder-name regex CAN happen to
+       match a subdirectory that's really only a fragment of a series (a
+       scanner/PACS export can split one acquisition across many
+       subdirectories, one per instance), which dcm2niix's own
+       per-subdirectory conversion has no way to detect or recover from;
+       mrinfo's UID-based grouping sidesteps that regardless of how the
+       files happen to be laid out on disk.
+    3. Only if no DICOM data is found at all AND nothing is classifiable
+       from the plain _wrap_flat_inputs result — e.g. a "foreign" dump of
+       already-converted NIfTI/MIF files with no per-series subdirectories
+       — fall back to the dcm2niix-based auto-split path kept here for
+       that narrower case.
+    4. If every path above fails or finds nothing, return the original
        staged result unchanged — existing downstream messaging ("No MPRAGE
        directory found" etc.) already handles the empty case.
     """
     staged = _wrap_flat_inputs(input_dir, output_dir)
+
+    dicom_out = output_dir / "_staged_dicom"
+    if dicom_out.exists():
+        shutil.rmtree(dicom_out)
+    converted = stage_dicom_tree(input_dir, dicom_out)
+    if converted is not None:
+        prior_staged_input = output_dir / "_staged_input"
+        if prior_staged_input.exists():
+            shutil.rmtree(prior_staged_input)
+        return _wrap_flat_inputs(converted, output_dir)
+
     if _has_classifiable_series(staged):
         return staged
 
     print(
-        "  No organized series subdirectories found — attempting to "
-        "auto-split a flat/foreign DICOM dump via dcm2niix...\n"
+        "  No organized series subdirectories found, and no DICOM data "
+        "detected — attempting to auto-split a flat/foreign dump via "
+        "dcm2niix...\n"
     )
-    dicom_out = output_dir / "_staged_dicom"
-    if dicom_out.exists():
-        shutil.rmtree(dicom_out)
     dicom_out.mkdir(parents=True, exist_ok=True)
 
     try:
