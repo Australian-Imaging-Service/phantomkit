@@ -125,7 +125,7 @@ class MrView(shell.Task["MrView.Outputs"]):
         argstr="-intensity_range",
         help=(
             "Display intensity range as 'min,max'. "
-            "Use '0,1' for FA maps and '0,0.005' for ADC maps."
+            "Use '0,0.005' for ADC maps."
         ),
     )
     capture_grab: bool = shell.arg(
@@ -236,17 +236,13 @@ def GeneratePlots(
     vial_masks_list = sorted(vial_path.glob("*.nii.gz"))  # triggers runtime fallback
 
     def _classify_contrast(stem: str) -> str | None:
-        """Detect ADC / FA contrast types from filename stem."""
+        """Detect ADC contrast type from filename stem."""
         import re as _re2
         if _re2.search(r"ADC", stem, _re2.IGNORECASE):
             return "adc"
-        if _re2.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", stem):
-            return "fa"
         return None
 
     def _intensity_range_for(contrast_type: str | None) -> str | None:
-        if contrast_type == "fa":
-            return "0,1"
         if contrast_type == "adc":
             return "0,0.005"
         return None

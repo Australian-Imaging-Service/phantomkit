@@ -52,14 +52,11 @@ def _classify_contrast(contrast_file: Path) -> Optional[str]:
     Returns
     -------
     "adc"  – filename contains 'ADC' (case-insensitive)
-    "fa"   – filename contains standalone 'FA' (whole-word, case-insensitive)
     None   – no special classification
     """
     stem = contrast_file.stem
     if re.search(r"ADC", stem, re.IGNORECASE):
         return "adc"
-    if re.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", stem):
-        return "fa"
     return None
 
 
@@ -76,7 +73,7 @@ def _generate_mrview_screenshot(
     ----------
     intensity_range:
         If provided, passes ``-intensity_range min,max`` to mrview.
-        Use (0, 1) for FA maps and (0, 0.005) for ADC maps.
+        Use (0, 0.005) for ADC maps.
     """
     cmd = [
         "mrview",
@@ -340,11 +337,7 @@ def _task_extract_metrics(
 
         # Classify contrast and filter vials for ADC
         stem = contrast_file.stem
-        contrast_type = None
-        if re.search(r"ADC", stem, re.IGNORECASE):
-            contrast_type = "adc"
-        elif re.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", stem):
-            contrast_type = "fa"
+        contrast_type = "adc" if re.search(r"ADC", stem, re.IGNORECASE) else None
 
         active_vials = vial_paths
         if contrast_type == "adc":
@@ -1097,13 +1090,7 @@ def _task_generate_plots(
                 )
                 if roi_overlay:
                     contrast_type = _classify_contrast(contrast_file)
-                    intensity_range = (
-                        (0, 1)
-                        if contrast_type == "fa"
-                        else (0, 0.005)
-                        if contrast_type == "adc"
-                        else None
-                    )
+                    intensity_range = (0, 0.005) if contrast_type == "adc" else None
                     screenshot_base = str(
                         tmp_vial_dir / f"{contrast_name}_roi_overlay.png"
                     )

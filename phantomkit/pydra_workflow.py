@@ -139,7 +139,7 @@ def RunPhantomSession(
 # ---------------------------------------------------------------------------
 
 
-@workflow.define(outputs=["t1_in_dwi", "adc", "fa", "dwi_preproc"])
+@workflow.define(outputs=["t1_in_dwi", "adc", "dwi_preproc"])
 def PhantomKitWorkflow(
     # ── Core anatomical & phantom identity ───────────────────────────────────
     t1w: NiftiGz,
@@ -157,7 +157,7 @@ def PhantomKitWorkflow(
     do_fslpreproc: bool = False,
     do_biascorrect: bool = False,
     gradcheck: bool = False,
-) -> tuple[NiftiGz | None, NiftiGz | None, NiftiGz | None, ImageOut | None]:
+) -> tuple[NiftiGz | None, NiftiGz | None, ImageOut | None]:
     """End-to-end PhantomKit MRI phantom QA workflow.
 
     All inputs are concrete typed fileformats objects — no directory paths.
@@ -197,11 +197,10 @@ def PhantomKitWorkflow(
         return (
             dwi_wf.t1_in_dwi,
             dwi_wf.adc,
-            dwi_wf.fa,
             dwi_wf.dwi_preproc,
         )
     else:
         # No DWI — Stage 1+2 skipped; Stage 3 (native QC) is handled by
         # the CLI via pipeline.py stages until PhantomSessionWf is refactored
         # to expose typed file outputs for direct workflow.add() integration.
-        return t1w, None, None, None
+        return t1w, None, None

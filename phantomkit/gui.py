@@ -85,11 +85,21 @@ async def browse(path: str = "", mode: str = "dir"):
 
 @app.get("/api/list-htmls")
 async def list_htmls(output_dir: str = ""):
-    """Return all HTML files under output_dir/**/metrics/plots/."""
+    """Return all HTML files under output_dir/**/metrics/plots/.
+
+    Excludes anything under a .pydra_cache* directory: pydra keeps its own
+    copy of every task's output files there for caching/checkpointing, so
+    without this filter each real plot would also be matched a second time
+    from inside the cache, showing up as a duplicate "open result" button.
+    """
     base = Path(output_dir)
     if not base.is_dir():
         return JSONResponse({"htmls": []})
-    htmls = sorted(str(h) for h in base.rglob("metrics/plots/*.html"))
+    htmls = sorted(
+        str(h)
+        for h in base.rglob("metrics/plots/*.html")
+        if not any(part.startswith(".pydra_cache") for part in h.relative_to(base).parts)
+    )
     return JSONResponse({"htmls": htmls})
 
 

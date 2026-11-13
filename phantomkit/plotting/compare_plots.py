@@ -71,7 +71,7 @@ def _extract(
 ) -> tuple[str, list[str], dict[str, float | None], dict[str, float | None]]:
     """Return (metric_key, vials_in_order, {vial_upper: value_or_None}, {vial_upper: se_or_None}).
 
-    metric_key is one of: "ADC", "FA", "Intensity", "T1", "T2".
+    metric_key is one of: "ADC", "Intensity", "T1", "T2".
     se_vals contains the curve-fit standard error of the fitted relaxation time
     (T1_se_ms or T2_se_ms) for T1/T2 types, or the per-vial std for
     vial_intensity types; empty dict only if no error info was embedded.
@@ -90,7 +90,7 @@ def _extract(
         means = data.get("means", [])
         stds = data.get("stds")
         mode = data.get("contrast_mode", "generic")
-        metric = {"adc": "ADC", "fa": "FA"}.get(mode, "Intensity")
+        metric = {"adc": "ADC"}.get(mode, "Intensity")
 
         vals = {v.upper(): _scalar(m) for v, m in zip(vials, means)}
         se_vals = (
@@ -232,7 +232,6 @@ def _derive_labels(paths: list[str]) -> list[str]:
 
 _Y_LABELS: dict[str, str] = {
     "ADC": "ADC \u00d710\u207b\u00b3 mm\u00b2/s",
-    "FA": "Fractional Anisotropy",
     "T1": "T\u2081 (ms)",
     "T2": "T\u2082 (ms)",
     "Intensity": "Intensity",

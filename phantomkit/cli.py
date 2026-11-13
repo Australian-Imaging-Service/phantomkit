@@ -680,7 +680,6 @@ def run_pipeline(
                 _copy_map = [
                     (out.t1_in_dwi,    "T1_in_DWI_space.nii.gz"),
                     (out.adc,          "ADC.nii.gz"),
-                    (out.fa,           "FA.nii.gz"),
                     (out.dwi_preproc,  plan["dwi_preproc_name"]),
                 ]
                 for src, dst_name in _copy_map:

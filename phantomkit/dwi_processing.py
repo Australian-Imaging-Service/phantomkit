@@ -14,7 +14,6 @@ Output structure:
     <output_dir>/
         <DWI_series_name>/
             ADC.nii.gz
-            FA.nii.gz
             DWI_preproc_biascorr.mif.gz   (or DWI_denoise_gibbs_preproc_biascorr.mif.gz)
             T1_in_DWI_space.nii.gz
             tmp/                           (intermediate files — removed unless --nocleanup)
@@ -1547,18 +1546,15 @@ def copy_t1_as_dwi_space(t1_nii: str, tmp_dir: str) -> str:
     return t1_out
 
 
-@python.define(outputs=["adc", "fa"])
-def compute_tensor_metrics(dwi_biascorr_mif: str, tmp_dir: str) -> tuple[str, str]:
+@python.define(outputs=["adc"])
+def compute_tensor_metrics(dwi_biascorr_mif: str, tmp_dir: str) -> str:
     tensor_mif = str(Path(tmp_dir) / "tensor.mif.gz")
     adc_mif = str(Path(tmp_dir) / "ADC.mif.gz")
-    fa_mif = str(Path(tmp_dir) / "FA.mif.gz")
     adc_nii = str(Path(tmp_dir) / "ADC.nii.gz")
-    fa_nii = str(Path(tmp_dir) / "FA.nii.gz")
     run_cmd(["dwi2tensor", dwi_biascorr_mif, tensor_mif])
-    run_cmd(["tensor2metric", "-adc", adc_mif, "-fa", fa_mif, tensor_mif])
+    run_cmd(["tensor2metric", "-adc", adc_mif, tensor_mif])
     run_cmd(["mrconvert", adc_mif, adc_nii])
-    run_cmd(["mrconvert", fa_mif, fa_nii])
-    return (adc_nii, fa_nii)
+    return adc_nii
 
 
 @python.define(outputs=["out"])
@@ -1566,7 +1562,6 @@ def copy_final_outputs_task(
     dwi_biascorr_mif: str,
     t1_in_dwi: str,
     adc_nii: str,
-    fa_nii: str,
     out_dir: str,
     dwi_preproc_name: str,
     t1_output_name: str,
@@ -1576,12 +1571,10 @@ def copy_final_outputs_task(
     dst_dwi = str(Path(out_dir) / dwi_preproc_name)
     dst_t1 = str(Path(out_dir) / t1_output_name)
     dst_adc = str(Path(out_dir) / "ADC.nii.gz")
-    dst_fa = str(Path(out_dir) / "FA.nii.gz")
     copies = [
         (dwi_biascorr_mif, dst_dwi),
         (t1_in_dwi, dst_t1),
         (adc_nii, dst_adc),
-        (fa_nii, dst_fa),
     ]
     if dwi_raw_mif and Path(dwi_raw_mif).exists():
         copies.append((dwi_raw_mif, str(Path(out_dir) / "DWI_raw.mif.gz")))
@@ -1751,7 +1744,7 @@ def CastToMif(path: object) -> ImageFormatGz:
 # =============================================================================
 
 
-@workflow.define(outputs=["t1_in_dwi", "adc", "fa", "dwi_preproc"])
+@workflow.define(outputs=["t1_in_dwi", "adc", "dwi_preproc"])
 def DWISeriesWorkflow(
     t1w: NiftiGz,
     dwi: ImageIn,
@@ -1766,7 +1759,7 @@ def DWISeriesWorkflow(
     do_fslpreproc: bool = False,
     do_biascorrect: bool = False,
     gradcheck: bool = False,
-) -> tuple[NiftiGz, NiftiGz, NiftiGz, ImageOut]:
+) -> tuple[NiftiGz, NiftiGz, ImageOut]:
     """End-to-end DWI preprocessing + T1 coregistration + tensor metrics.
 
     Inputs are concrete typed fileformats objects — directory scanning and
@@ -1929,21 +1922,16 @@ def DWISeriesWorkflow(
     # ── Diffusion tensor + metrics ────────────────────────────────────────────
     tensor = workflow.add(Dwi2Tensor(dwi=dwi_for_tensor), name="tensor")
     metrics = workflow.add(
-        Tensor2Metric(tensor=tensor.dt, adc="ADC.mif.gz", fa="FA.mif.gz"), name="metrics"
+        Tensor2Metric(tensor=tensor.dt, adc="ADC.mif.gz"), name="metrics"
     )
     adc_cast = workflow.add(CastToMif(path=metrics.adc), name="adc_cast")
-    fa_cast = workflow.add(CastToMif(path=metrics.fa), name="fa_cast")
     adc_nii = workflow.add(
         MrConvert(in_file=adc_cast.out, out_file="ADC.nii.gz"), name="adc_to_nii"
-    )
-    fa_nii = workflow.add(
-        MrConvert(in_file=fa_cast.out, out_file="FA.nii.gz"), name="fa_to_nii"
     )
 
     return (
         t1_in_dwi.out,
         adc_nii.out_file,
-        fa_nii.out_file,
         dwi_for_tensor,
     )
 
@@ -2016,11 +2004,10 @@ def build_dwi_workflow(plan: dict):
 
     out_dwi = str(Path(out_dir) / dwi_preproc_name)
     out_adc = str(Path(out_dir) / "ADC.nii.gz")
-    out_fa = str(Path(out_dir) / "FA.nii.gz")
     out_t1 = str(Path(out_dir) / t1_output_name)
 
     # ── CP1: all final outputs exist — nothing to do ─────────────────────────
-    if _exists(out_dwi, out_adc, out_fa, out_t1):
+    if _exists(out_dwi, out_adc, out_t1):
         print(f"  [skip] All outputs already exist in {Path(out_dir).name}")
         return
 
@@ -2100,7 +2087,6 @@ def build_dwi_workflow(plan: dict):
                     dwi_biascorr_mif=biascorr_mif,
                     t1_in_dwi=t1_result,
                     adc_nii=tensor.adc,
-                    fa_nii=tensor.fa,
                     out_dir=out_dir,
                     dwi_preproc_name=dwi_preproc_name,
                     t1_output_name=t1_output_name,
@@ -2399,7 +2385,6 @@ def build_dwi_workflow(plan: dict):
                     dwi_biascorr_mif=biascorr_out,
                     t1_in_dwi=t1_result,
                     adc_nii=tensor.adc,
-                    fa_nii=tensor.fa,
                     out_dir=out_dir,
                     dwi_preproc_name=dwi_preproc_name,
                     t1_output_name=t1_output_name,

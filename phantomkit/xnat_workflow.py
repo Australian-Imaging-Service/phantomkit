@@ -72,7 +72,7 @@ def _rename_contrasts(named: dict) -> list:
     """Copy each contrast to a fresh path stemmed by its own source name.
 
     phantom_processor.py's per-contrast classification (TI vs TE vs
-    anatomical vs ADC/FA) and output naming both derive identity purely
+    anatomical vs ADC) and output naming both derive identity purely
     from each input file's own local path stem — frametree/pydra2app
     stage downloaded XNAT sources under their own (non-descriptive, and
     not guaranteed distinct) local cache filenames, so without this
@@ -97,19 +97,18 @@ def _rename_contrasts(named: dict) -> list:
 
 @python.define(outputs=["files"])
 def _CombineStage2Contrasts(
-    t1_in_dwi: NiftiGz, adc: NiftiGz, fa: NiftiGz
+    t1_in_dwi: NiftiGz, adc: NiftiGz
 ) -> list[NiftiGz]:
-    """Bundle Stage 1's three lazy outputs into one list[NiftiGz] field.
+    """Bundle Stage 1's two lazy outputs into one list[NiftiGz] field.
 
     Pydra can't coerce a plain Python list containing several separate
     lazy sub-workflow outputs directly into a list[NiftiGz]-typed
     parameter at another task's call site (it expects the whole list to
     come from one upstream task) — this task exists purely to be that one
     upstream source. Also renames each to its own identity (T1_in_DWI /
-    ADC / FA — "FA" uppercase to match phantom_processor.py's
-    case-sensitive FA-classification regex) via _rename_contrasts.
+    ADC) via _rename_contrasts.
     """
-    return _rename_contrasts({"T1_in_DWI": t1_in_dwi, "ADC": adc, "FA": fa})
+    return _rename_contrasts({"T1_in_DWI": t1_in_dwi, "ADC": adc})
 
 
 @python.define(outputs=["files"])
@@ -263,7 +262,7 @@ def PhantomKitXnatWorkflow(
     fixed to ``"rpe_all"`` — not exposed as a parameter, since the
     acquisition protocol never varies).
     Stage 2: phantom QC in DWI space (``PhantomSessionWf`` on
-    ``t1_in_dwi``/``adc``/``fa``), runs in parallel with Stage 3.
+    ``t1_in_dwi``/``adc``), runs in parallel with Stage 3.
     Stage 3: native-contrast QC (``PhantomSessionWf`` on the MPRAGE + all
     12 TI + all 8 TE scans).
     All three stages' outputs are bundled into one ``Directory`` sink by
@@ -341,7 +340,7 @@ def PhantomKitXnatWorkflow(
         stage2_dir = _new_qc_output_dir("phantomkit_stage2_")
         stage2_contrasts = workflow.add(
             _CombineStage2Contrasts(
-                t1_in_dwi=dwi_wf.t1_in_dwi, adc=dwi_wf.adc, fa=dwi_wf.fa,
+                t1_in_dwi=dwi_wf.t1_in_dwi, adc=dwi_wf.adc,
             ),
             name="stage2_combine",
         )

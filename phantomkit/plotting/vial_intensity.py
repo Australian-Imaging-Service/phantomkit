@@ -11,9 +11,6 @@ Plot mode is detected automatically from the csv_file filename:
     · Measured values plotted as filled red circles
     · Requires --phantom and --template_dir so the reference JSON can be loaded
 
-  FA mode   – filename contains standalone 'FA' (case-insensitive, whole-word)
-    · Y-axis: Fractional Anisotropy, fixed range 0–1
-
   Generic   – all other filenames → standard intensity plot
 
 Output formats
@@ -299,7 +296,6 @@ def _build_vial_intensity_html(
     head = html_head(title, include_niivue=_has_viewer)
 
     tick_step_js = "opts.scales.x.ticks.stepSize = 1;"
-    fa_ylim_js = "opts.scales.y.min = 0; opts.scales.y.max = 1;" if contrast_mode == "fa" else ""
     adc_legend_js = (
         "opts.plugins.legend.display = true;"
         " opts.plugins.legend.labels = { color: '#888780', font: { size: 12 } };"
@@ -355,7 +351,6 @@ const opts = baseOpts("Vial", {y_label_json});
 opts.scales.x.type = "linear";
 opts.scales.x.ticks.callback = (v) => VIALS[v] ?? v;
 {tick_step_js}
-{fa_ylim_js}
 {adc_legend_js}
 
 const chart = new Chart(
@@ -404,7 +399,7 @@ def main():
         description=(
             "Plot vial vs intensity (mean ± std) for 3D or 4D contrasts, "
             "with optional ROI overlay.\n\n"
-            "Plot mode (ADC / FA / generic) is detected automatically from "
+            "Plot mode (ADC / generic) is detected automatically from "
             "the csv_file filename — no flags required."
         )
     )
@@ -489,7 +484,7 @@ def plot_vial_intensity(
     vial_niftis: dict | None = None,
     scan_date: str | None = None,
 ):
-    """Plot vial vs intensity. Mode (ADC/FA/generic) auto-detected from csv_file name.
+    """Plot vial vs intensity. Mode (ADC/generic) auto-detected from csv_file name.
 
     Can be called programmatically or via the CLI entry point (main()).
 
@@ -519,8 +514,6 @@ def plot_vial_intensity(
     csv_stem = Path(csv_file).stem
     if re.search(r"ADC", csv_stem, re.IGNORECASE):
         contrast_mode = "adc"
-    elif re.search(r"(?<![A-Za-z0-9])FA(?![A-Za-z0-9])", csv_stem):
-        contrast_mode = "fa"
     else:
         contrast_mode = "generic"
 
@@ -630,9 +623,6 @@ def plot_vial_intensity(
     if contrast_mode == "adc":
         y_label = "ADC ×10⁻³ mm²/s"
         title = f"{phantom_label}Measured vs Reference ADC"
-    elif contrast_mode == "fa":
-        y_label = "Fractional Anisotropy"
-        title = f"{phantom_label}Fractional Anisotropy (Mean ± Std)"
     else:
         y_label = "Intensity"
         title = f"{phantom_label}Vial vs Intensity (Mean ± Std)"
@@ -771,14 +761,6 @@ def plot_vial_intensity(
         )
         # Plain numeric ticks (values are already in ×10⁻³)
         ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda val, _: f"{val:.2f}"))
-    elif contrast_mode == "fa":
-        ax.set_ylabel("Fractional Anisotropy", fontsize=12)
-        ax.set_title(
-            f"{phantom_label}Fractional Anisotropy (Mean ± Std)",
-            fontsize=13,
-            fontweight="bold",
-        )
-        ax.set_ylim(0, 1)
     else:
         ax.set_ylabel("Intensity", fontsize=12)
         ax.set_title(f"{phantom_label}Vial vs Intensity (Mean ± Std)", fontsize=13)

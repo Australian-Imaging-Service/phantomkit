@@ -9,13 +9,13 @@ Stages
   Stage 1  DWI processing  (phantomkit.dwi_processing)
            Runs if DWI acquisitions are found in --input-dir.
            Outputs per DWI series:
-             T1_in_DWI_space.nii.gz, ADC.nii.gz, FA.nii.gz,
+             T1_in_DWI_space.nii.gz, ADC.nii.gz,
              DWI_preproc_biascorr.mif.gz
 
   Stage 2  Phantom QC in DWI space  (phantomkit.phantom_processor)
            Runs once per DWI series produced by Stage 1.
            Input image: T1_in_DWI_space.nii.gz from Stage 1.
-           ADC and FA files in the same folder are picked up automatically.
+           ADC files in the same folder are picked up automatically.
            Temperature estimation runs automatically after this stage when
            ADC metrics are available.
 
@@ -499,7 +499,7 @@ def run_stage2(
     """
     For each DWI output directory, run PhantomProcessor on
     T1_in_DWI_space.nii.gz (or T1.nii.gz for rpe_none).
-    ADC.nii.gz and FA.nii.gz in the same folder are picked up automatically.
+    ADC.nii.gz in the same folder is picked up automatically.
     """
     print_header("STAGE 2 — Phantom QC in DWI Space")
 
