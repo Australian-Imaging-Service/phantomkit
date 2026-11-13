@@ -21,8 +21,11 @@ dependencies = [
     "pydra-tasks-ants",
     "pydra-tasks-fsl",
     "pydra-tasks-mrtrix3",
+    "openpyxl >=3.0",
     "scipy >=1.10.0",
     "typing_extensions >=4.6.3; python_version < '4.0'",
+    "fastapi >=0.100",
+    "uvicorn[standard] >=0.23",
 ]
 
 authors = [
@@ -64,6 +67,12 @@ test = [
     "pytest >=6.2.5",
     "pytest-env>=0.6.2",
     "pytest-cov>=2.12.1",
+    # XNAT Container Service integration test (tests/test_phantom_qc_preprocess.py)
+    "frametree>=0.17.1",
+    "frametree-xnat>=0.6.16",
+    "xnat4tests>=0.3.14",
+    "pydra2app>=0.20.7",
+    "pydra2app-xnat>=0.8.7",
 ]
 docs = [
     "packaging",
@@ -78,6 +87,7 @@ docs = [
 
 [project.scripts]
 phantomkit = "phantomkit.cli:main"
+phantomkit-gui = "phantomkit.gui:main"
 
 [project.urls]
 repository = "https://github.com/Australian-Imaging-Service/phantomkit"
@@ -85,6 +95,7 @@ repository = "https://github.com/Australian-Imaging-Service/phantomkit"
 
 [tool.hatch.version]
 source = "vcs"
+fallback-version = "0.0.0"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "phantomkit/_version.py"
